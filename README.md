@@ -35,26 +35,24 @@ But fine-tuning typically changes <20% of weights. 80%+ of that transfer is redu
 ## How It Works
 
 ```
-          CONTROL PLANE                                    DEVICE AGENT
-    ┌─────────────────────────┐                     ┌─────────────────────────┐
-    │                         │    heartbeat        │                         │
-    │  Model Store            │◄────────────────────│  "I have v1.0.0"        │
-    │  ├── v1.0.0  (2.1 MB)  │                     │                         │
-    │  ├── v2.0.0  (2.1 MB)  │    assignment       │                         │
-    │  └── delta/             │────────────────────►│  "run v2.0.0"           │
-    │      └── v1→v2.oxdl    │                     │                         │
-    │         (1,263 bytes)   │    delta download   │                         │
-    │                         │────────────────────►│  receive 1,263 bytes    │
-    │  On upload:             │                     │  reconstruct from v1    │
-    │  1. Store full file     │                     │  verify SHA-256         │
-    │  2. Compute delta       │                     │  backup v1 → apply v2   │
-    │  3. Cache OXDL patch    │                     │  health check → done    │
-    │                         │    heartbeat        │                         │
-    │                         │◄────────────────────│  "I have v2.0.0"  ✓    │
-    └─────────────────────────┘                     └─────────────────────────┘
+    CONTROL PLANE                                          DEVICE AGENT
+  ┌──────────────────────┐                           ┌──────────────────────┐
+  │                      │                           │                      │
+  │  Model Store         │  ◄── heartbeat ─────────  │  "I have v1.0.0"     │
+  │   v1.0.0  (2.1 MB)  │                           │                      │
+  │   v2.0.0  (2.1 MB)  │  ─── assignment ────────► │  "run v2.0.0"        │
+  │   delta/v1→v2.oxdl  │                           │                      │
+  │      (1,263 bytes)   │  ─── delta download ───► │  receive 1,263 bytes  │
+  │                      │                           │  reconstruct from v1  │
+  │  On upload:          │                           │  verify SHA-256       │
+  │   1. Store file      │                           │  backup → apply → ✓   │
+  │   2. Compute delta   │                           │                      │
+  │   3. Cache patch     │  ◄── heartbeat ─────────  │  "I have v2.0.0"  ✓  │
+  │                      │                           │                      │
+  └──────────────────────┘                           └──────────────────────┘
 
-    Full file: 2,143,752 bytes per device        Delta: 1,263 bytes per device
-    1,000 devices = 2.1 GB                       1,000 devices = 1.2 MB
+  Full file: 2,143,752 bytes/device                  Delta: 1,263 bytes/device
+  1,000 devices = 2.1 GB                             1,000 devices = 1.2 MB
 ```
 
 ### Two delta strategies, best wins
