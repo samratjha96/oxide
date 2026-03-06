@@ -491,6 +491,7 @@ mod control_plane_integration {
     use axum::body::Body;
     use http_body_util::BodyExt;
     use oxide_control::fleet_manager::FleetManager;
+    use oxide_control::campaign::CampaignStore;
     use oxide_control::model_store::ControlPlaneModelStore;
     use oxide_control::registry::DeviceRegistry;
     use oxide_control::server::{ControlPlaneServer, ControlPlaneState};
@@ -509,6 +510,7 @@ mod control_plane_integration {
             registry,
             fleet_manager,
             model_store,
+            campaigns: Arc::new(RwLock::new(CampaignStore::new())),
         });
         ControlPlaneServer::router(state)
     }

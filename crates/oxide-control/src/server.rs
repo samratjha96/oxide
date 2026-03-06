@@ -15,6 +15,7 @@ use std::sync::Arc;
 use tokio::sync::RwLock;
 use tracing::info;
 
+use crate::campaign::{Campaign, CampaignId, CampaignStore};
 use crate::fleet_manager::{DeploymentRequest, FleetManager};
 use crate::model_store::ControlPlaneModelStore;
 use crate::registry::DeviceRegistry;
@@ -24,6 +25,7 @@ pub struct ControlPlaneState {
     pub registry: Arc<DeviceRegistry>,
     pub fleet_manager: Arc<FleetManager>,
     pub model_store: Arc<RwLock<ControlPlaneModelStore>>,
+    pub campaigns: Arc<RwLock<CampaignStore>>,
 }
 
 /// Request to register a device.
@@ -47,6 +49,7 @@ pub struct CreateFleetRequest {
 pub struct DeployRequest {
     pub model_id: String,
     pub model_version: String,
+    pub fleet_id: Option<String>,
     pub strategy: Option<String>, // "all_at_once", "canary", "rolling"
 }
 
@@ -78,6 +81,12 @@ impl ControlPlaneServer {
             .route("/api/v1/models/{model_id}/versions/{version}/download", get(Self::download_model))
             .route("/api/v1/models/{model_id}/versions/{version}/meta", get(Self::model_meta))
             .route("/api/v1/models/{model_id}", get(Self::list_model_versions))
+            // Campaign endpoints
+            .route("/api/v1/campaigns", post(Self::create_campaign).get(Self::list_campaigns))
+            .route("/api/v1/campaigns/{id}", get(Self::get_campaign))
+            .route("/api/v1/campaigns/{id}/pause", post(Self::pause_campaign))
+            .route("/api/v1/campaigns/{id}/resume", post(Self::resume_campaign))
+            .route("/api/v1/campaigns/{id}/abort", post(Self::abort_campaign))
             // Health
             .route("/health", get(Self::health))
             .with_state(state)
@@ -332,6 +341,173 @@ impl ControlPlaneServer {
             .fleet_status(&FleetId::from(fleet_id.as_str()))
             .map(|status| (StatusCode::OK, Json(serde_json::to_value(status).unwrap())))
             .map_err(|e| (StatusCode::NOT_FOUND, e.to_string()))
+    }
+
+    // ─── Campaigns ───
+
+    /// Create a new campaign (replaces fire-and-forget deploy).
+    async fn create_campaign(
+        State(state): State<Arc<ControlPlaneState>>,
+        Json(req): Json<DeployRequest>,
+    ) -> Result<(StatusCode, Json<serde_json::Value>), (StatusCode, String)> {
+        let model_id = ModelId::from(req.model_id.as_str());
+        let model_version = ModelVersion::from(req.model_version.as_str());
+        let fleet_id = FleetId::from(
+            req.fleet_id
+                .as_deref()
+                .ok_or_else(|| (StatusCode::BAD_REQUEST, "fleet_id required".to_string()))?,
+        );
+
+        // Get fleet devices
+        let fleet = state
+            .fleet_manager
+            .get_fleet(&fleet_id)
+            .map_err(|e| (StatusCode::NOT_FOUND, e.to_string()))?;
+
+        // Set assignments on all fleet devices
+        for device_id in &fleet.devices {
+            let _ = state.registry.set_assignment(
+                device_id,
+                Some(model_id.clone()),
+                Some(model_version.clone()),
+            );
+        }
+
+        // Create campaign
+        let campaign_id = CampaignId(format!(
+            "{}-{}-{}",
+            model_id.0,
+            model_version.0,
+            chrono::Utc::now().timestamp()
+        ));
+        let campaign = Campaign::new(
+            campaign_id.clone(),
+            model_id,
+            model_version,
+            fleet_id,
+            fleet.devices.clone(),
+        );
+
+        let summary = campaign.summary();
+        let mut campaigns = state.campaigns.write().await;
+        campaigns.create(campaign);
+
+        Ok((
+            StatusCode::CREATED,
+            Json(serde_json::json!({
+                "campaign_id": campaign_id.0,
+                "state": "rolling_out",
+                "total_devices": summary.total,
+            })),
+        ))
+    }
+
+    async fn list_campaigns(
+        State(state): State<Arc<ControlPlaneState>>,
+    ) -> Result<(StatusCode, Json<serde_json::Value>), (StatusCode, String)> {
+        let campaigns = state.campaigns.read().await;
+        let list: Vec<serde_json::Value> = campaigns
+            .list()
+            .iter()
+            .map(|c| {
+                let s = c.summary();
+                serde_json::json!({
+                    "id": c.id.0,
+                    "model_id": c.model_id.0,
+                    "target_version": c.target_version.0,
+                    "fleet_id": c.fleet_id.0,
+                    "state": format!("{:?}", c.state),
+                    "total": s.total,
+                    "complete": s.complete,
+                    "failed": s.failed,
+                })
+            })
+            .collect();
+        Ok((StatusCode::OK, Json(serde_json::json!({ "campaigns": list }))))
+    }
+
+    async fn get_campaign(
+        State(state): State<Arc<ControlPlaneState>>,
+        Path(id): Path<String>,
+    ) -> Result<(StatusCode, Json<serde_json::Value>), (StatusCode, String)> {
+        let campaigns = state.campaigns.read().await;
+        let campaign = campaigns
+            .get(&CampaignId(id.clone()))
+            .ok_or_else(|| (StatusCode::NOT_FOUND, format!("campaign {id} not found")))?;
+
+        let summary = campaign.summary();
+        let devices: Vec<serde_json::Value> = campaign
+            .devices
+            .iter()
+            .map(|(did, state)| {
+                serde_json::json!({
+                    "device_id": did.0,
+                    "state": format!("{state:?}"),
+                })
+            })
+            .collect();
+
+        Ok((
+            StatusCode::OK,
+            Json(serde_json::json!({
+                "id": campaign.id.0,
+                "model_id": campaign.model_id.0,
+                "target_version": campaign.target_version.0,
+                "state": format!("{:?}", campaign.state),
+                "created_at": campaign.created_at,
+                "summary": summary,
+                "devices": devices,
+                "bandwidth": {
+                    "bytes_served": campaign.total_bytes_served,
+                    "bytes_saved_by_delta": campaign.total_bytes_saved_by_delta,
+                },
+            })),
+        ))
+    }
+
+    async fn pause_campaign(
+        State(state): State<Arc<ControlPlaneState>>,
+        Path(id): Path<String>,
+    ) -> Result<(StatusCode, Json<serde_json::Value>), (StatusCode, String)> {
+        let mut campaigns = state.campaigns.write().await;
+        let campaign = campaigns
+            .get_mut(&CampaignId(id.clone()))
+            .ok_or_else(|| (StatusCode::NOT_FOUND, format!("campaign {id} not found")))?;
+        campaign.pause();
+        Ok((
+            StatusCode::OK,
+            Json(serde_json::json!({ "state": format!("{:?}", campaign.state) })),
+        ))
+    }
+
+    async fn resume_campaign(
+        State(state): State<Arc<ControlPlaneState>>,
+        Path(id): Path<String>,
+    ) -> Result<(StatusCode, Json<serde_json::Value>), (StatusCode, String)> {
+        let mut campaigns = state.campaigns.write().await;
+        let campaign = campaigns
+            .get_mut(&CampaignId(id.clone()))
+            .ok_or_else(|| (StatusCode::NOT_FOUND, format!("campaign {id} not found")))?;
+        campaign.resume();
+        Ok((
+            StatusCode::OK,
+            Json(serde_json::json!({ "state": format!("{:?}", campaign.state) })),
+        ))
+    }
+
+    async fn abort_campaign(
+        State(state): State<Arc<ControlPlaneState>>,
+        Path(id): Path<String>,
+    ) -> Result<(StatusCode, Json<serde_json::Value>), (StatusCode, String)> {
+        let mut campaigns = state.campaigns.write().await;
+        let campaign = campaigns
+            .get_mut(&CampaignId(id.clone()))
+            .ok_or_else(|| (StatusCode::NOT_FOUND, format!("campaign {id} not found")))?;
+        campaign.abort();
+        Ok((
+            StatusCode::OK,
+            Json(serde_json::json!({ "state": format!("{:?}", campaign.state) })),
+        ))
     }
 
     // ─── Models ───

@@ -1,5 +1,6 @@
 //! `oxide serve` — Start the control plane server.
 
+use oxide_control::campaign::CampaignStore;
 use oxide_control::fleet_manager::FleetManager;
 use oxide_control::model_store::ControlPlaneModelStore;
 use oxide_control::registry::DeviceRegistry;
@@ -27,6 +28,7 @@ pub async fn execute(host: &str, port: u16) -> anyhow::Result<()> {
         registry,
         fleet_manager,
         model_store,
+        campaigns: Arc::new(RwLock::new(CampaignStore::new())),
     });
 
     let app = ControlPlaneServer::router(state);
@@ -50,6 +52,12 @@ pub async fn execute(host: &str, port: u16) -> anyhow::Result<()> {
     println!("    POST /api/v1/models/:id/versions/:ver          — upload model");
     println!("    GET  /api/v1/models/:id/versions/:ver/download — download model");
     println!("    GET  /api/v1/models/:id/versions/:ver/meta     — model metadata");
+    println!("    POST /api/v1/campaigns                          — create campaign");
+    println!("    GET  /api/v1/campaigns                          — list campaigns");
+    println!("    GET  /api/v1/campaigns/:id                      — campaign status");
+    println!("    POST /api/v1/campaigns/:id/pause                — pause campaign");
+    println!("    POST /api/v1/campaigns/:id/resume               — resume campaign");
+    println!("    POST /api/v1/campaigns/:id/abort                — abort campaign");
     println!();
     println!("  press ctrl-c to stop");
     println!();

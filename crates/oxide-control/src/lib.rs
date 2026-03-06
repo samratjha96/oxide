@@ -5,11 +5,13 @@
 
 #![deny(unsafe_code)]
 
+pub mod campaign;
 pub mod fleet_manager;
 pub mod model_store;
 pub mod registry;
 pub mod server;
 
+pub use campaign::{Campaign, CampaignId, CampaignStore};
 pub use fleet_manager::FleetManager;
 pub use model_store::ControlPlaneModelStore;
 pub use registry::DeviceRegistry;
