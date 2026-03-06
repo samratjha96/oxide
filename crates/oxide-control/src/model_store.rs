@@ -470,7 +470,7 @@ mod tests {
         // Delta may or may not exist depending on whether it was smaller
         // than the full file (for tiny test data, it might not be)
         if let Some((delta_bytes, cached)) = delta {
-            assert!(delta_bytes.len() > 0);
+            assert!(!delta_bytes.is_empty());
             assert_eq!(cached.base_version, ModelVersion::from("v1"));
             assert_eq!(cached.target_version, ModelVersion::from("v2"));
         }

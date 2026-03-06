@@ -393,7 +393,7 @@ mod fleet_integration {
         }
 
         // Create fleet
-        let manager = FleetManager::new(registry.clone());
+        let manager = FleetManager::new(registry);
         let mut fleet = Fleet::new(FleetId::from("warehouse"), "Warehouse Cameras");
         for i in 0..20 {
             fleet.add_device(DeviceId::from(format!("cam-{:03}", i).as_str()));
@@ -593,7 +593,7 @@ mod control_plane_integration {
         for i in 0..3 {
             let req = axum::http::Request::builder()
                 .method("POST")
-                .uri(&format!("/api/v1/fleets/test-fleet/devices/dev-{}", i))
+                .uri(format!("/api/v1/fleets/test-fleet/devices/dev-{}", i))
                 .body(Body::empty())
                 .unwrap();
             let resp = app.clone().oneshot(req).await.unwrap();

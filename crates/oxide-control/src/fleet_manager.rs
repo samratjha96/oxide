@@ -424,7 +424,7 @@ mod tests {
         // Reload and verify
         {
             let manager =
-                FleetManager::with_persistence(registry.clone(), &fleet_path).unwrap();
+                FleetManager::with_persistence(registry, &fleet_path).unwrap();
             let fleets = manager.list_fleets().unwrap();
             assert_eq!(fleets.len(), 1);
             let got = manager.get_fleet(&FleetId::from("prod")).unwrap();

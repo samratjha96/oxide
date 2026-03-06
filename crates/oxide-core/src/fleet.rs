@@ -137,7 +137,7 @@ mod tests {
         let d2 = DeviceId::from("pi-02");
 
         fleet.add_device(d1.clone());
-        fleet.add_device(d2.clone());
+        fleet.add_device(d2);
         assert_eq!(fleet.device_count(), 2);
 
         // No duplicates

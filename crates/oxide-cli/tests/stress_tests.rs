@@ -54,7 +54,7 @@ mod stress_tests {
         let engine = Arc::new(InferenceEngine::new(0));
         let path = test_models_dir().join("sigmoid_model.onnx");
         let info = engine.load_model(&path).unwrap();
-        let model_id = info.id.clone();
+        let model_id = info.id;
 
         let mut handles = Vec::new();
         for t in 0..4 {

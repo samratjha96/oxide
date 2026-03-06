@@ -190,8 +190,7 @@ mod tests {
             tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap(),
             app,
         );
-        // Just verify the router builds without error
-        assert!(true);
+        // Just verify the router builds without error — if we got here, it passed.
     }
 
     #[test]
