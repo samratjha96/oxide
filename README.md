@@ -35,18 +35,26 @@ But fine-tuning typically changes <20% of weights. 80%+ of that transfer is redu
 ## How It Works
 
 ```
-Upload v2                                    Agent has v1
-┌──────────────┐                          ┌──────────────┐
-│ Control Plane│                          │ Device Agent  │
-│              │                          │               │
-│ Upload v2 ───┼→ compute delta(v1, v2)   │ heartbeat ────┼→ "I have v1"
-│              │  tensor XOR: 1,263 bytes  │               │
-│              │                          │ ← "here's v2" │
-│              │  ─── delta patch ────→   │               │
-│              │  (instead of 2.1 MB)     │ reconstruct   │
-│              │                          │ verify SHA-256│
-│              │                          │ apply + check │
-└──────────────┘                          └──────────────┘
+          CONTROL PLANE                                    DEVICE AGENT
+    ┌─────────────────────────┐                     ┌─────────────────────────┐
+    │                         │    heartbeat        │                         │
+    │  Model Store            │◄────────────────────│  "I have v1.0.0"        │
+    │  ├── v1.0.0  (2.1 MB)  │                     │                         │
+    │  ├── v2.0.0  (2.1 MB)  │    assignment       │                         │
+    │  └── delta/             │────────────────────►│  "run v2.0.0"           │
+    │      └── v1→v2.oxdl    │                     │                         │
+    │         (1,263 bytes)   │    delta download   │                         │
+    │                         │────────────────────►│  receive 1,263 bytes    │
+    │  On upload:             │                     │  reconstruct from v1    │
+    │  1. Store full file     │                     │  verify SHA-256         │
+    │  2. Compute delta       │                     │  backup v1 → apply v2   │
+    │  3. Cache OXDL patch    │                     │  health check → done    │
+    │                         │    heartbeat        │                         │
+    │                         │◄────────────────────│  "I have v2.0.0"  ✓    │
+    └─────────────────────────┘                     └─────────────────────────┘
+
+    Full file: 2,143,752 bytes per device        Delta: 1,263 bytes per device
+    1,000 devices = 2.1 GB                       1,000 devices = 1.2 MB
 ```
 
 ### Two delta strategies, best wins
