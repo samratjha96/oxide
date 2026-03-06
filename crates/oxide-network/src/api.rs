@@ -13,6 +13,9 @@ use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use tokio::sync::RwLock;
 
+/// Type alias for the inference callback used by the device API.
+pub type InferenceFn = Arc<dyn Fn(&[f32], &[usize]) -> Result<Vec<f32>, OxideError> + Send + Sync>;
+
 /// Shared state for the device API.
 pub struct ApiState {
     /// Device ID.
@@ -24,9 +27,7 @@ pub struct ApiState {
     /// Latest metrics snapshot.
     pub metrics: Option<InferenceMetrics>,
     /// Inference callback (accepts f32 input, shape, returns f32 output).
-    pub inference_fn: Option<
-        Arc<dyn Fn(&[f32], &[usize]) -> Result<Vec<f32>, OxideError> + Send + Sync>,
-    >,
+    pub inference_fn: Option<InferenceFn>,
 }
 
 /// Request body for inference.
@@ -185,7 +186,7 @@ mod tests {
         let state = make_state();
         let app = DeviceApi::router(state);
 
-        let response = axum::serve(
+        let _response = axum::serve(
             tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap(),
             app,
         );

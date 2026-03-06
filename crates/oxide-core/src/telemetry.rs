@@ -58,7 +58,7 @@ pub struct TelemetryQueue {
 
 impl TelemetryQueue {
     /// Create a new telemetry queue with the given maximum size.
-    pub fn new(max_size: usize) -> Self {
+    pub const fn new(max_size: usize) -> Self {
         TelemetryQueue {
             reports: Vec::new(),
             max_size,
@@ -80,17 +80,17 @@ impl TelemetryQueue {
     }
 
     /// Number of pending reports.
-    pub fn len(&self) -> usize {
+    pub const fn len(&self) -> usize {
         self.reports.len()
     }
 
     /// Check if queue is empty.
-    pub fn is_empty(&self) -> bool {
+    pub const fn is_empty(&self) -> bool {
         self.reports.is_empty()
     }
 
     /// Check if queue is full.
-    pub fn is_full(&self) -> bool {
+    pub const fn is_full(&self) -> bool {
         self.reports.len() >= self.max_size
     }
 }

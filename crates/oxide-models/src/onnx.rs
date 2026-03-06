@@ -9,10 +9,13 @@ use std::path::Path;
 use tract_onnx::prelude::*;
 use tracing::{debug, info};
 
+/// Type alias for the optimized tract inference plan.
+type TractPlan = SimplePlan<TypedFact, Box<dyn TypedOp>, Graph<TypedFact, Box<dyn TypedOp>>>;
+
 /// An ONNX model loaded via tract, ready for inference.
 pub struct OnnxModel {
     /// The optimized tract model, ready to run.
-    model: SimplePlan<TypedFact, Box<dyn TypedOp>, Graph<TypedFact, Box<dyn TypedOp>>>,
+    model: TractPlan,
     /// Model metadata.
     info: ModelInfo,
 }
@@ -141,7 +144,7 @@ impl OnnxModel {
     }
 
     /// Get model information / metadata.
-    pub fn info(&self) -> &ModelInfo {
+    pub const fn info(&self) -> &ModelInfo {
         &self.info
     }
 
@@ -152,7 +155,7 @@ impl OnnxModel {
                 .iter()
                 .filter_map(|outlet| {
                     let fact = self.model.model().outlet_fact(*outlet).ok()?;
-                    let shape = fact.shape.as_concrete()?.iter().copied().collect();
+                    let shape = fact.shape.as_concrete()?.to_vec();
                     Some(shape)
                 })
                 .collect()
@@ -162,7 +165,7 @@ impl OnnxModel {
     }
 
     fn extract_inputs(
-        model: &SimplePlan<TypedFact, Box<dyn TypedOp>, Graph<TypedFact, Box<dyn TypedOp>>>,
+        model: &TractPlan,
     ) -> Vec<TensorInfo> {
         let outlets = match model.model().input_outlets() {
             Ok(o) => o,
@@ -184,7 +187,7 @@ impl OnnxModel {
                     name: if name.is_empty() {
                         format!("input_{}", i)
                     } else {
-                        name.to_string()
+                        name
                     },
                     shape,
                     dtype,
@@ -194,7 +197,7 @@ impl OnnxModel {
     }
 
     fn extract_outputs(
-        model: &SimplePlan<TypedFact, Box<dyn TypedOp>, Graph<TypedFact, Box<dyn TypedOp>>>,
+        model: &TractPlan,
     ) -> Vec<TensorInfo> {
         let outlets = match model.model().output_outlets() {
             Ok(o) => o,
@@ -216,7 +219,7 @@ impl OnnxModel {
                     name: if name.is_empty() {
                         format!("output_{}", i)
                     } else {
-                        name.to_string()
+                        name
                     },
                     shape,
                     dtype,

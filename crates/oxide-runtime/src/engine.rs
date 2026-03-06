@@ -4,17 +4,18 @@ use oxide_core::error::{OxideError, Result};
 use oxide_core::metrics::{InferenceMetrics, LatencyTracker};
 use oxide_core::model::{ModelId, ModelInfo};
 use oxide_models::OnnxModel;
+use parking_lot::RwLock;
 use std::collections::HashMap;
 use std::path::Path;
-use std::sync::{Arc, RwLock};
+use std::sync::Arc;
 use std::time::Instant;
 use tracing::{debug, error, info};
 
 /// The core inference engine that manages loaded models and runs inference.
 pub struct InferenceEngine {
-    /// Currently loaded models.
+    /// Currently loaded models (parking_lot: no poisoning, faster locks).
     models: Arc<RwLock<HashMap<ModelId, LoadedModel>>>,
-    /// Configuration.
+    /// Number of inference threads.
     num_threads: usize,
 }
 
@@ -40,6 +41,9 @@ pub struct InferenceResult {
 
 impl InferenceEngine {
     /// Create a new inference engine.
+    ///
+    /// Pass `0` for `num_threads` to auto-detect from available parallelism.
+    #[must_use]
     pub fn new(num_threads: usize) -> Self {
         let threads = if num_threads == 0 {
             std::thread::available_parallelism()
@@ -48,7 +52,7 @@ impl InferenceEngine {
         } else {
             num_threads
         };
-        info!("Creating inference engine with {} threads", threads);
+        info!("Creating inference engine with {threads} threads");
         InferenceEngine {
             models: Arc::new(RwLock::new(HashMap::new())),
             num_threads: threads,
@@ -71,11 +75,7 @@ impl InferenceEngine {
             loaded_at: Instant::now(),
         };
 
-        let mut models = self.models.write().map_err(|e| {
-            OxideError::Internal(format!("Lock poisoned: {}", e))
-        })?;
-        models.insert(model_id.clone(), loaded);
-
+        self.models.write().insert(model_id, loaded);
         Ok(info)
     }
 
@@ -95,21 +95,14 @@ impl InferenceEngine {
             loaded_at: Instant::now(),
         };
 
-        let mut models = self.models.write().map_err(|e| {
-            OxideError::Internal(format!("Lock poisoned: {}", e))
-        })?;
-        models.insert(model_id.clone(), loaded);
-
+        self.models.write().insert(model_id, loaded);
         Ok(info)
     }
 
     /// Unload a model by ID.
     pub fn unload_model(&self, model_id: &ModelId) -> Result<()> {
-        let mut models = self.models.write().map_err(|e| {
-            OxideError::Internal(format!("Lock poisoned: {}", e))
-        })?;
-        if models.remove(model_id).is_some() {
-            info!("Unloaded model '{}'", model_id);
+        if self.models.write().remove(model_id).is_some() {
+            info!("Unloaded model '{model_id}'");
             Ok(())
         } else {
             Err(OxideError::ModelNotFound(model_id.to_string()))
@@ -123,13 +116,10 @@ impl InferenceEngine {
         input: &[f32],
         shape: &[usize],
     ) -> Result<InferenceResult> {
-        let mut models = self.models.write().map_err(|e| {
-            OxideError::Internal(format!("Lock poisoned: {}", e))
-        })?;
-
-        let loaded = models.get_mut(model_id).ok_or_else(|| {
-            OxideError::ModelNotFound(model_id.to_string())
-        })?;
+        let mut models = self.models.write();
+        let loaded = models
+            .get_mut(model_id)
+            .ok_or_else(|| OxideError::ModelNotFound(model_id.to_string()))?;
 
         let start = Instant::now();
         let result = loaded.onnx.run_f32(input, shape);
@@ -155,7 +145,7 @@ impl InferenceEngine {
             }
             Err(e) => {
                 loaded.failed_inferences += 1;
-                error!("Inference failed on '{}': {}", model_id, e);
+                error!("Inference failed on '{model_id}': {e}");
                 Err(e)
             }
         }
@@ -163,55 +153,43 @@ impl InferenceEngine {
 
     /// Get metrics for a loaded model.
     pub fn get_metrics(&self, model_id: &ModelId) -> Result<InferenceMetrics> {
-        let models = self.models.read().map_err(|e| {
-            OxideError::Internal(format!("Lock poisoned: {}", e))
-        })?;
-
-        let loaded = models.get(model_id).ok_or_else(|| {
-            OxideError::ModelNotFound(model_id.to_string())
-        })?;
+        let models = self.models.read();
+        let loaded = models
+            .get(model_id)
+            .ok_or_else(|| OxideError::ModelNotFound(model_id.to_string()))?;
 
         let mut metrics = loaded.latency_tracker.to_metrics(
             loaded.total_inferences,
             loaded.failed_inferences,
-            0, // Memory tracking would need a separate mechanism
+            0,
         );
         metrics.uptime_seconds = loaded.loaded_at.elapsed().as_secs();
-
         Ok(metrics)
     }
 
     /// Get information about a loaded model.
     pub fn get_model_info(&self, model_id: &ModelId) -> Result<ModelInfo> {
-        let models = self.models.read().map_err(|e| {
-            OxideError::Internal(format!("Lock poisoned: {}", e))
-        })?;
-
-        let loaded = models.get(model_id).ok_or_else(|| {
-            OxideError::ModelNotFound(model_id.to_string())
-        })?;
-
+        let models = self.models.read();
+        let loaded = models
+            .get(model_id)
+            .ok_or_else(|| OxideError::ModelNotFound(model_id.to_string()))?;
         Ok(loaded.onnx.info().clone())
     }
 
     /// List all loaded model IDs.
     pub fn list_models(&self) -> Result<Vec<ModelId>> {
-        let models = self.models.read().map_err(|e| {
-            OxideError::Internal(format!("Lock poisoned: {}", e))
-        })?;
-        Ok(models.keys().cloned().collect())
+        Ok(self.models.read().keys().cloned().collect())
     }
 
     /// Check if a model is loaded.
+    #[must_use]
     pub fn is_loaded(&self, model_id: &ModelId) -> bool {
-        self.models
-            .read()
-            .map(|m| m.contains_key(model_id))
-            .unwrap_or(false)
+        self.models.read().contains_key(model_id)
     }
 
     /// Get the number of configured threads.
-    pub fn num_threads(&self) -> usize {
+    #[must_use]
+    pub const fn num_threads(&self) -> usize {
         self.num_threads
     }
 }

@@ -58,7 +58,7 @@ pub fn execute(
                 model_id: ModelId::from(model_name),
                 new_version: ModelVersion::from("v1.0.0"),
                 previous_version: None,
-                sha256: sha256.clone(),
+                sha256,
                 size_bytes: size as u64,
                 encrypted: false,
             };

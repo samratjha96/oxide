@@ -37,7 +37,7 @@ impl EncryptionKey {
                 bytes.len()
             )));
         }
-        let key = Key::<Aes256Gcm>::from_slice(bytes).clone();
+        let key = *Key::<Aes256Gcm>::from_slice(bytes);
         Ok(EncryptionKey { key })
     }
 
@@ -156,7 +156,7 @@ fn hex_encode(bytes: &[u8]) -> String {
 
 /// Simple hex decoding.
 fn hex_decode(hex: &str) -> Result<Vec<u8>> {
-    if hex.len() % 2 != 0 {
+    if !hex.len().is_multiple_of(2) {
         return Err(OxideError::Encryption("Invalid hex string length".to_string()));
     }
     (0..hex.len())

@@ -4,6 +4,8 @@
 //! Manages model lifecycle, inference execution, metrics collection,
 //! model hot-swapping, and health checks.
 
+#![deny(unsafe_code)]
+
 pub mod engine;
 pub mod health;
 pub mod store;

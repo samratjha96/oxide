@@ -1,6 +1,9 @@
 use thiserror::Error;
 
 /// Core error type for the Oxide runtime.
+///
+/// Prefer the specific variants (e.g. `ModelNotFound`, `Encryption`) over the
+/// generic ones (`Internal`) so callers can pattern-match on failure modes.
 #[derive(Error, Debug)]
 pub enum OxideError {
     #[error("Model error: {0}")]
@@ -57,8 +60,11 @@ pub enum OxideError {
     #[error("JSON error: {0}")]
     Json(#[from] serde_json::Error),
 
-    #[error("TOML error: {0}")]
-    Toml(String),
+    #[error("TOML deserialization error: {0}")]
+    Toml(#[from] toml::de::Error),
+
+    #[error("TOML serialization error: {0}")]
+    TomlSer(#[from] toml::ser::Error),
 
     #[error("Timeout: {0}")]
     Timeout(String),

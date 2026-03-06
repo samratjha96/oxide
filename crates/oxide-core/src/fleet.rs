@@ -21,10 +21,11 @@ impl From<&str> for FleetId {
 }
 
 /// Strategy for rolling out updates to a fleet.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum RolloutStrategy {
     /// Deploy to all devices simultaneously.
+    #[default]
     AllAtOnce,
     /// Canary rollout: deploy to a percentage, wait, then expand.
     Canary {
@@ -42,12 +43,6 @@ pub enum RolloutStrategy {
         /// Seconds to wait between batches.
         wait_seconds: u64,
     },
-}
-
-impl Default for RolloutStrategy {
-    fn default() -> Self {
-        RolloutStrategy::AllAtOnce
-    }
 }
 
 /// Status of an ongoing rollout.
@@ -118,7 +113,7 @@ impl Fleet {
     }
 
     /// Number of devices in the fleet.
-    pub fn device_count(&self) -> usize {
+    pub const fn device_count(&self) -> usize {
         self.devices.len()
     }
 }

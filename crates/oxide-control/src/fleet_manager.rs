@@ -156,14 +156,14 @@ impl FleetManager {
 
         // Get the devices to deploy to based on strategy
         let deploy_devices = match &request.strategy {
-            RolloutStrategy::AllAtOnce => fleet.devices.clone(),
+            RolloutStrategy::AllAtOnce => fleet.devices,
             RolloutStrategy::Canary { stages, .. } => {
                 if let Some(&first_pct) = stages.first() {
                     let count =
                         (fleet.devices.len() as f64 * first_pct as f64 / 100.0).ceil() as usize;
                     fleet.devices.iter().take(count).cloned().collect()
                 } else {
-                    fleet.devices.clone()
+                    fleet.devices
                 }
             }
             RolloutStrategy::Rolling { batch_size, .. } => {

@@ -1,8 +1,9 @@
 use serde::{Deserialize, Serialize};
+use std::collections::VecDeque;
 use std::time::Duration;
 
 /// Inference performance metrics for a single device.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct InferenceMetrics {
     /// Total number of inferences performed.
     pub total_inferences: u64,
@@ -28,76 +29,62 @@ pub struct InferenceMetrics {
     pub uptime_seconds: u64,
 }
 
-impl Default for InferenceMetrics {
-    fn default() -> Self {
-        InferenceMetrics {
-            total_inferences: 0,
-            failed_inferences: 0,
-            avg_latency_us: 0.0,
-            p50_latency_us: 0.0,
-            p95_latency_us: 0.0,
-            p99_latency_us: 0.0,
-            max_latency_us: 0.0,
-            throughput_per_sec: 0.0,
-            memory_usage_bytes: 0,
-            model_load_time_us: 0,
-            uptime_seconds: 0,
-        }
-    }
-}
-
-/// Latency tracker that computes percentiles from a stream of measurements.
+/// Latency tracker that computes percentiles from a ring buffer of measurements.
+///
+/// Uses a `VecDeque` for O(1) eviction of the oldest sample when the buffer is
+/// full, instead of the O(n) `Vec::remove(0)` that was here previously.
 #[derive(Debug, Clone)]
 pub struct LatencyTracker {
-    samples: Vec<f64>,
+    samples: VecDeque<f64>,
     max_samples: usize,
 }
 
 impl LatencyTracker {
-    /// Create a new latency tracker.
+    /// Create a new latency tracker that retains at most `max_samples` entries.
+    #[must_use]
     pub fn new(max_samples: usize) -> Self {
         LatencyTracker {
-            samples: Vec::with_capacity(max_samples),
+            samples: VecDeque::with_capacity(max_samples),
             max_samples,
         }
     }
 
-    /// Record a latency sample.
+    /// Record a latency sample from a [`Duration`].
     pub fn record(&mut self, duration: Duration) {
-        let us = duration.as_secs_f64() * 1_000_000.0;
-        if self.samples.len() >= self.max_samples {
-            // Circular buffer behavior: drop oldest
-            self.samples.remove(0);
-        }
-        self.samples.push(us);
+        self.record_us(duration.as_secs_f64() * 1_000_000.0);
     }
 
-    /// Record latency in microseconds directly.
+    /// Record a latency value already expressed in microseconds.
     pub fn record_us(&mut self, us: f64) {
         if self.samples.len() >= self.max_samples {
-            self.samples.remove(0);
+            self.samples.pop_front(); // O(1)
         }
-        self.samples.push(us);
+        self.samples.push_back(us);
     }
 
-    /// Get the number of recorded samples.
+    /// Number of recorded samples currently held.
+    #[must_use]
     pub fn count(&self) -> usize {
         self.samples.len()
     }
 
-    /// Compute percentile (0.0 to 1.0).
+    /// Compute a percentile where `p` is in `0.0..=1.0`.
+    ///
+    /// Returns `0.0` when no samples have been recorded.
+    #[must_use]
     pub fn percentile(&self, p: f64) -> f64 {
         if self.samples.is_empty() {
             return 0.0;
         }
-        let mut sorted = self.samples.clone();
-        sorted.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
-        let idx = ((p * (sorted.len() as f64 - 1.0)).round()) as usize;
-        let idx = idx.min(sorted.len() - 1);
-        sorted[idx]
+        let mut sorted: Vec<f64> = self.samples.iter().copied().collect();
+        sorted.sort_unstable_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+
+        let idx = (p * (sorted.len() - 1) as f64).round() as usize;
+        sorted[idx.min(sorted.len() - 1)]
     }
 
-    /// Compute average latency.
+    /// Arithmetic mean of all recorded latencies in microseconds.
+    #[must_use]
     pub fn average(&self) -> f64 {
         if self.samples.is_empty() {
             return 0.0;
@@ -105,24 +92,24 @@ impl LatencyTracker {
         self.samples.iter().sum::<f64>() / self.samples.len() as f64
     }
 
-    /// Get max latency.
+    /// Maximum recorded latency in microseconds.
+    #[must_use]
     pub fn max(&self) -> f64 {
-        self.samples
-            .iter()
-            .cloned()
-            .fold(0.0_f64, f64::max)
+        self.samples.iter().copied().fold(0.0_f64, f64::max)
     }
 
-    /// Compute throughput (inferences per second) based on average latency.
+    /// Throughput in inferences per second, derived from the average latency.
+    #[must_use]
     pub fn throughput(&self) -> f64 {
         let avg = self.average();
         if avg <= 0.0 {
             return 0.0;
         }
-        1_000_000.0 / avg // Convert from us to per-second
+        1_000_000.0 / avg
     }
 
-    /// Build an InferenceMetrics snapshot.
+    /// Snapshot the current tracker state into an [`InferenceMetrics`].
+    #[must_use]
     pub fn to_metrics(&self, total: u64, failed: u64, memory_bytes: u64) -> InferenceMetrics {
         InferenceMetrics {
             total_inferences: total,
@@ -161,17 +148,15 @@ mod tests {
     fn test_latency_tracker_percentiles() {
         let mut tracker = LatencyTracker::new(1000);
         for i in 1..=100 {
-            tracker.record_us(i as f64 * 100.0); // 100us to 10000us
+            tracker.record_us(i as f64 * 100.0);
         }
         assert_eq!(tracker.count(), 100);
 
-        // P50 should be ~5000us
         let p50 = tracker.percentile(0.50);
-        assert!(p50 > 4500.0 && p50 < 5500.0, "p50 = {}", p50);
+        assert!(p50 > 4500.0 && p50 < 5500.0, "p50 = {p50}");
 
-        // P99 should be ~9900us
         let p99 = tracker.percentile(0.99);
-        assert!(p99 > 9500.0 && p99 < 10100.0, "p99 = {}", p99);
+        assert!(p99 > 9500.0 && p99 < 10100.0, "p99 = {p99}");
     }
 
     #[test]
@@ -180,7 +165,6 @@ mod tests {
         for i in 0..10 {
             tracker.record_us(i as f64 * 100.0);
         }
-        // Should only keep last 5 samples
         assert_eq!(tracker.count(), 5);
     }
 
@@ -196,7 +180,7 @@ mod tests {
     fn test_to_metrics() {
         let mut tracker = LatencyTracker::new(1000);
         for _ in 0..100 {
-            tracker.record_us(1000.0); // 1ms = 1000us
+            tracker.record_us(1000.0);
         }
         let metrics = tracker.to_metrics(100, 2, 50_000_000);
         assert_eq!(metrics.total_inferences, 100);

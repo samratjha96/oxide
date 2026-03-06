@@ -38,7 +38,7 @@ mod stress_tests {
         let path = test_models_dir().join("add_model.onnx");
 
         // Load and unload 50 times
-        for i in 0..50 {
+        for _i in 0..50 {
             let info = engine.load_model(&path).unwrap();
             let result = engine.infer(&info.id, &[1.0, 2.0, 3.0, 4.0], &[1, 4]).unwrap();
             assert_eq!(result.outputs, vec![4.0, 5.0, 6.0, 7.0]);
@@ -94,7 +94,7 @@ mod stress_tests {
         assert_eq!(info.outputs[0].shape, vec![1, 10]);
 
         // Run inference with random-ish input
-        let input: Vec<f32> = (0..784).map(|i| (i as f32 / 784.0)).collect();
+        let input: Vec<f32> = (0..784).map(|i| i as f32 / 784.0).collect();
         let result = engine.infer(&info.id, &input, &[1, 784]).unwrap();
 
         // Output should be softmax (sum ≈ 1.0)

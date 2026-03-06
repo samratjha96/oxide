@@ -2,7 +2,7 @@ use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 
 /// Top-level Oxide configuration.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct OxideConfig {
     /// Runtime configuration.
     pub runtime: RuntimeConfig,
@@ -14,28 +14,16 @@ pub struct OxideConfig {
     pub telemetry: TelemetryConfig,
 }
 
-impl Default for OxideConfig {
-    fn default() -> Self {
-        OxideConfig {
-            runtime: RuntimeConfig::default(),
-            security: SecurityConfig::default(),
-            network: NetworkConfig::default(),
-            telemetry: TelemetryConfig::default(),
-        }
-    }
-}
-
 impl OxideConfig {
     /// Load configuration from a TOML file.
     pub fn from_file(path: &Path) -> crate::Result<Self> {
         let content = std::fs::read_to_string(path)?;
-        toml::from_str(&content).map_err(|e| crate::OxideError::Config(e.to_string()))
+        Ok(toml::from_str(&content)?)
     }
 
     /// Save configuration to a TOML file.
     pub fn to_file(&self, path: &Path) -> crate::Result<()> {
-        let content =
-            toml::to_string_pretty(self).map_err(|e| crate::OxideError::Config(e.to_string()))?;
+        let content = toml::to_string_pretty(self)?;
         std::fs::write(path, content)?;
         Ok(())
     }
@@ -66,7 +54,7 @@ impl Default for RuntimeConfig {
 }
 
 /// Security configuration.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct SecurityConfig {
     /// Enable model encryption at rest.
     pub encrypt_models: bool,
@@ -80,19 +68,6 @@ pub struct SecurityConfig {
     pub key_pem_file: Option<PathBuf>,
     /// Path to CA certificate for mTLS verification.
     pub ca_file: Option<PathBuf>,
-}
-
-impl Default for SecurityConfig {
-    fn default() -> Self {
-        SecurityConfig {
-            encrypt_models: false,
-            key_file: None,
-            enable_mtls: false,
-            cert_file: None,
-            key_pem_file: None,
-            ca_file: None,
-        }
-    }
 }
 
 /// Network configuration.
