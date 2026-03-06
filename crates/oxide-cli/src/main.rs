@@ -136,6 +136,10 @@ enum Commands {
         /// Local model storage directory
         #[arg(long, default_value = "./models")]
         model_dir: String,
+
+        /// Health check command (exit 0 = healthy). Model path set in $OXIDE_MODEL_PATH
+        #[arg(long)]
+        health_check: Option<String>,
     },
 
     /// Show metrics for a running model
@@ -263,7 +267,17 @@ async fn main() -> anyhow::Result<()> {
             device_id,
             poll_interval,
             model_dir,
-        } => commands::agent::execute(&control_plane, &device_id, poll_interval, &model_dir).await?,
+            health_check,
+        } => {
+            commands::agent::execute(
+                &control_plane,
+                &device_id,
+                poll_interval,
+                &model_dir,
+                health_check.as_deref(),
+            )
+            .await?
+        }
 
         Commands::Metrics { model } => commands::metrics::execute(model.as_deref())?,
 

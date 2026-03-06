@@ -3,7 +3,6 @@
 use oxide_core::device::{HeartbeatRequest, HeartbeatResponse, UpdateResult};
 use oxide_core::model::{ModelId, ModelVersion};
 use oxide_network::ota::{OtaUpdater, UpdatePackage};
-use oxide_runtime::InferenceEngine;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::path::{Path, PathBuf};
@@ -26,6 +25,7 @@ pub async fn execute(
     device_id: &str,
     poll_interval: u64,
     model_dir: &str,
+    health_check_cmd: Option<&str>,
 ) -> anyhow::Result<()> {
     let model_dir = PathBuf::from(model_dir);
     std::fs::create_dir_all(&model_dir)?;
@@ -38,6 +38,11 @@ pub async fn execute(
     println!("  control:    {}", control_plane);
     println!("  poll:       every {}s", poll_interval);
     println!("  model dir:  {}", model_dir.display());
+    if let Some(cmd) = health_check_cmd {
+        println!("  health:     {}", cmd);
+    } else {
+        println!("  health:     file exists (no custom hook)");
+    }
     println!();
 
     // Load persisted state
@@ -318,9 +323,9 @@ pub async fn execute(
 
                 // 5. Health check
                 print!("  [{}] health check...", now);
-                match run_health_check(&active_path) {
-                    Ok((latency, outputs)) => {
-                        println!(" passed ({:.0}μs, {} outputs)", latency, outputs);
+                match run_health_check(&active_path, health_check_cmd) {
+                    Ok(msg) => {
+                        println!(" passed ({})", msg);
                     }
                     Err(e) => {
                         println!(" ✗ failed: {}", e);
@@ -360,33 +365,41 @@ pub async fn execute(
     }
 }
 
-fn run_health_check(model_path: &Path) -> anyhow::Result<(f64, usize)> {
-    let engine = InferenceEngine::new(0);
-    let info = engine.load_model(model_path)?;
+/// Run a health check on the newly applied model.
+///
+/// If a custom command is provided, runs it with `OXIDE_MODEL_PATH` set.
+/// Exit code 0 = healthy. Otherwise, checks the file exists and is non-empty.
+fn run_health_check(model_path: &Path, custom_cmd: Option<&str>) -> anyhow::Result<String> {
+    if let Some(cmd) = custom_cmd {
+        let output = std::process::Command::new("sh")
+            .args(["-c", cmd])
+            .env("OXIDE_MODEL_PATH", model_path)
+            .output()?;
 
-    // Build zero input matching model's expected shape
-    let input_shape: Vec<usize> = info
-        .inputs
-        .first()
-        .map(|inp| {
-            inp.shape
-                .iter()
-                .map(|&d| if d < 0 { 1 } else { d as usize })
-                .collect()
-        })
-        .unwrap_or_else(|| vec![1]);
-    let input_size: usize = input_shape.iter().product();
-    let input_data = vec![0.0f32; input_size];
-
-    let start = std::time::Instant::now();
-    let result = engine.infer(&info.id, &input_data, &input_shape)?;
-    let latency_us = start.elapsed().as_secs_f64() * 1_000_000.0;
-
-    if result.outputs.is_empty() {
-        anyhow::bail!("inference produced 0 outputs");
+        if output.status.success() {
+            let stdout = String::from_utf8_lossy(&output.stdout);
+            let msg = stdout.trim();
+            if msg.is_empty() {
+                Ok("exit 0".to_string())
+            } else {
+                Ok(msg.to_string())
+            }
+        } else {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            anyhow::bail!(
+                "health check exited {}: {}",
+                output.status.code().unwrap_or(-1),
+                stderr.trim()
+            );
+        }
+    } else {
+        // Default: just check the file exists and is non-empty
+        let meta = std::fs::metadata(model_path)?;
+        if meta.len() == 0 {
+            anyhow::bail!("model file is empty");
+        }
+        Ok(format!("{} bytes on disk", meta.len()))
     }
-
-    Ok((latency_us, result.outputs.len()))
 }
 
 fn sha256_hex(data: &[u8]) -> String {
