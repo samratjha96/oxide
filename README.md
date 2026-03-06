@@ -13,7 +13,7 @@
 ```bash
 # You have an ONNX model. You have a Raspberry Pi. Go.
 oxide run defect-detector.onnx --input image.json --shape "1,3,224,224"
-# ✓ Loaded in 3ms · Inference: 29μs · Output: [0.02, 0.97, 0.01]
+# loaded in 3ms · inference: 29μs · output: [0.02, 0.97, 0.01]
 ```
 
 Oxide is an edge AI runtime that replaces your Python deployment scripts, your SSH-into-every-device workflow, and your "it works on my laptop" prayers with a single 6 MB binary.
@@ -50,17 +50,21 @@ cargo build --release          # 6 MB binary
 
 # See what's inside your model
 ./target/release/oxide info your-model.onnx
-# ⚡ Oxide — Model Info
-#   Format:   ONNX
-#   Size:     2,093 KB
-#   Inputs:   input [1, 784] (F32)
-#   Outputs:  softmax [1, 10] (F32)
+# oxide info your-model.onnx
+#   id:            your-model
+#   format:        ONNX
+#   size:          2093.51 KB (2143752 bytes)
+#   inputs:
+#     input [1, 784] (F32)
+#   outputs:
+#     softmax [1, 10] (F32)
 
 # Run it
 ./target/release/oxide run your-model.onnx
-# ✓ Loaded in 3.2ms
-# 🔥 Inference: 29μs
-# Output: [0.01, 0.02, 0.91, 0.01, ...]
+#   loaded in 3.2ms
+#   id:      your-model
+#   inference: 29μs
+#   output: [0.01, 0.02, 0.91, 0.01, ...]
 
 # Benchmark it properly
 ./target/release/oxide bench your-model.onnx --warmup 100 --iterations 5000
@@ -98,11 +102,17 @@ oxide run face-detector.onnx --input "[0.5, 0.3, ...]" --shape "1,3,224,224"
 ```bash
 oxide deploy defect-model.onnx --device rpi-cam-01
 
-# 📦 Staging model...        done (509 μs)
-# 🔍 Verifying integrity...  ✓ SHA-256 match
-# 🚀 Applying update...      done (5.2 ms)
-# 💚 Health check...         ✓ passed (3.7 ms, 4 outputs)
-# ✅ Deployed to 'rpi-cam-01'
+# oxide deploy
+#   model:    defect-model.onnx
+#   device:   rpi-cam-01
+#   strategy: all_at_once
+#
+#   staging model...         done (509μs)
+#   verifying integrity...   ok (sha-256 match)
+#   applying update...       done (5.2ms)
+#   health check...          passed (3.7ms, 4 outputs)
+#
+#   deployed to 'rpi-cam-01'
 ```
 
 If the health check fails, the previous model is restored automatically. No manual intervention. No "it's stuck on the broken version until someone SSHes in."
