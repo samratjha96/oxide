@@ -16,6 +16,8 @@ oxide-models = { workspace = true }
 oxide-security = { workspace = true }
 oxide-network = { workspace = true }
 oxide-control = { workspace = true }
+oxide-delta = { path = "../oxide-delta" }
+bytes = { workspace = true }
 clap = { workspace = true }
 tokio = { workspace = true }
 axum = { workspace = true }

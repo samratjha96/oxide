@@ -1507,11 +1507,13 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "axum",
+ "bytes",
  "chrono",
  "clap",
  "http-body-util",
  "oxide-control",
  "oxide-core",
+ "oxide-delta",
  "oxide-models",
  "oxide-network",
  "oxide-runtime",

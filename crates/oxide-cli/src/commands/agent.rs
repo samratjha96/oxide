@@ -164,14 +164,20 @@ pub async fn execute(
                     now, m, v
                 );
 
-                // 3. Download model
+                // 3. Download model (delta-aware)
                 let dl_url = format!(
                     "{}/api/v1/models/{}/versions/{}/download",
                     control_plane, m, v
                 );
                 println!("  [{}] downloading {}@{}...", now, m, v);
 
-                let dl_resp = match client.get(&dl_url).send().await {
+                // Build download request with delta headers
+                let mut dl_request = client.get(&dl_url);
+                if let Some(ref current_ver) = agent_state.current_model_version {
+                    dl_request = dl_request.header("X-Oxide-Base-Version", current_ver);
+                }
+
+                let dl_resp = match dl_request.send().await {
                     Ok(r) if r.status().is_success() => r,
                     Ok(r) => {
                         println!(
@@ -187,13 +193,30 @@ pub async fn execute(
                     }
                 };
 
-                let expected_sha = dl_resp
+                let content_type = dl_resp
                     .headers()
-                    .get("x-oxide-sha256")
+                    .get("content-type")
                     .and_then(|v| v.to_str().ok())
-                    .map(|s| s.to_string());
+                    .unwrap_or("application/octet-stream")
+                    .to_string();
 
-                let model_bytes = match dl_resp.bytes().await {
+                let is_delta = content_type == "application/x-oxide-delta";
+
+                let expected_sha = if is_delta {
+                    dl_resp
+                        .headers()
+                        .get("x-oxide-target-sha256")
+                        .and_then(|v| v.to_str().ok())
+                        .map(|s| s.to_string())
+                } else {
+                    dl_resp
+                        .headers()
+                        .get("x-oxide-sha256")
+                        .and_then(|v| v.to_str().ok())
+                        .map(|s| s.to_string())
+                };
+
+                let response_bytes = match dl_resp.bytes().await {
                     Ok(b) => b,
                     Err(e) => {
                         println!("  [{}] ✗ download body failed: {}", now, e);
@@ -201,8 +224,37 @@ pub async fn execute(
                     }
                 };
 
+                // Reconstruct model bytes from delta or use as-is
+                let model_bytes: Vec<u8> = if is_delta {
+                    println!(
+                        "  [{}] received delta ({} bytes), reconstructing...",
+                        now,
+                        response_bytes.len()
+                    );
+
+                    match reconstruct_from_delta(&response_bytes, &agent_state, &client, &dl_url, &now).await {
+                        Ok(data) => {
+                            let ratio = response_bytes.len() as f64 / data.len() as f64;
+                            let savings = ratio.mul_add(-100.0, 100.0);
+                            println!(
+                                "  [{}] reconstructed {} bytes ({:.1}% bandwidth saved)",
+                                now,
+                                data.len(),
+                                savings
+                            );
+                            data
+                        }
+                        Err(e) => {
+                            println!("  [{}] ✗ delta failed: {}", now, e);
+                            continue;
+                        }
+                    }
+                } else {
+                    response_bytes.to_vec()
+                };
+
                 println!(
-                    "  [{}] downloaded {} bytes",
+                    "  [{}] model ready: {} bytes",
                     now,
                     model_bytes.len()
                 );
@@ -371,4 +423,65 @@ async fn report_failure(
         error: error.to_string(),
     });
     let _ = client.post(hb_url).json(&req).send().await;
+}
+
+/// Attempt to reconstruct a model from a delta patch.
+///
+/// Reads the base model from disk, parses the delta, and applies it.
+/// On any failure, falls back to a full download.
+async fn reconstruct_from_delta(
+    delta_bytes: &[u8],
+    agent_state: &AgentState,
+    client: &reqwest::Client,
+    download_url: &str,
+    now: &str,
+) -> anyhow::Result<Vec<u8>> {
+    // Read base model from disk
+    let base_path = agent_state
+        .model_path
+        .as_ref()
+        .map(PathBuf::from);
+
+    let base_data = match &base_path {
+        Some(p) if p.exists() => std::fs::read(p)?,
+        _ => {
+            println!(
+                "  [{}] no base model on disk, falling back to full download",
+                now
+            );
+            return full_download(client, download_url).await;
+        }
+    };
+
+    // Parse and apply delta
+    let patch = match oxide_delta::DeltaPatch::from_bytes(delta_bytes) {
+        Ok(p) => p,
+        Err(e) => {
+            println!(
+                "  [{}] delta parse failed: {}, falling back to full download",
+                now, e
+            );
+            return full_download(client, download_url).await;
+        }
+    };
+
+    match oxide_delta::apply_delta(&base_data, &patch) {
+        Ok(reconstructed) => Ok(reconstructed),
+        Err(e) => {
+            println!(
+                "  [{}] delta apply failed: {}, falling back to full download",
+                now, e
+            );
+            full_download(client, download_url).await
+        }
+    }
+}
+
+/// Full model download (no delta headers).
+async fn full_download(client: &reqwest::Client, url: &str) -> anyhow::Result<Vec<u8>> {
+    let resp = client.get(url).send().await?;
+    if !resp.status().is_success() {
+        anyhow::bail!("full download failed: HTTP {}", resp.status());
+    }
+    Ok(resp.bytes().await?.to_vec())
 }
