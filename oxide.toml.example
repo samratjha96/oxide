@@ -1,0 +1,47 @@
+# Oxide Configuration File
+# Place this at ./oxide.toml or specify with --config
+
+[runtime]
+# Directory where models are stored
+model_dir = "./models"
+# Maximum memory budget for models in bytes (50MB)
+max_memory_bytes = 52428800
+# Number of inference threads (0 = auto-detect)
+num_threads = 0
+# Enable SIMD optimizations (NEON on ARM, SSE/AVX on x86)
+enable_simd = true
+
+[security]
+# Enable model encryption at rest
+encrypt_models = false
+# Path to the encryption key file
+# key_file = "./oxide.key"
+# Enable mTLS for device-to-control-plane communication
+enable_mtls = false
+# cert_file = "./certs/device.pem"
+# key_pem_file = "./certs/device-key.pem"
+# ca_file = "./certs/ca.pem"
+
+[network]
+# Control plane URL (for devices connecting to a control plane)
+# control_plane_url = "https://control-plane.example.com:8080"
+# Device listen address for the local API
+listen_addr = "0.0.0.0"
+# Port for the local API
+listen_port = 8090
+# Heartbeat interval in seconds
+heartbeat_interval_secs = 30
+# Connection timeout in seconds
+connect_timeout_secs = 10
+
+[telemetry]
+# Enable telemetry collection
+enabled = true
+# Reporting interval in seconds
+report_interval_secs = 60
+# Maximum telemetry queue size (for offline buffering)
+max_queue_size = 1000
+# Enable Prometheus metrics endpoint
+enable_prometheus = true
+# Prometheus metrics port
+prometheus_port = 9090
