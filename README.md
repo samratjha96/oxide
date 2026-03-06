@@ -1,5 +1,13 @@
 # ⚡ Oxide
 
+```
+   ██████  ██   ██ ██ ██████  ███████
+  ██    ██  ██ ██  ██ ██   ██ ██
+  ██    ██   ███   ██ ██   ██ █████
+  ██    ██  ██ ██  ██ ██   ██ ██
+   ██████  ██   ██ ██ ██████  ███████
+```
+
 **You trained the model. Now ship it to 1,000 devices without losing your mind.**
 
 ```bash
