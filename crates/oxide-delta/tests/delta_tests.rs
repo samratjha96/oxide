@@ -157,6 +157,29 @@ fn small_models_parse() {
 }
 
 #[test]
+fn all_layers_perturbed_round_trip() {
+    let base = read_model("mlp_mnist.onnx");
+    let target = perturb_all_layers(&base);
+
+    let result = compute_delta(&base, &target).unwrap();
+    let patch = result.expect("should produce delta for all-layer perturbation");
+
+    println!(
+        "All-layers delta: {} bytes ({:.1}% of {} byte file), strategy: {:?}",
+        patch.encoded_size(),
+        patch.encoded_size() as f64 / base.len() as f64 * 100.0,
+        base.len(),
+        patch.strategy,
+    );
+
+    // Should be smaller than full file
+    assert!(patch.encoded_size() < base.len());
+
+    let reconstructed = apply_delta(&base, &patch).unwrap();
+    assert_eq!(reconstructed, target);
+}
+
+#[test]
 fn wrong_base_rejected() {
     let base = read_model("mlp_mnist.onnx");
     let target = perturb_last_layer(&base);
@@ -175,21 +198,14 @@ fn wrong_base_rejected() {
 }
 
 /// Modify an ONNX file to simulate transfer learning on the last layer.
-///
-/// This works at the protobuf level: we know the ONNX file is a serialized
-/// ModelProto. Rather than depending on prost in tests, we use a simpler
-/// approach: use oxide-delta's own parse + reconstruct path via a helper.
-///
-/// Actually, the simplest approach that creates a valid ONNX file with
-/// different tensor data: use oxide-delta's internal ONNX module through
-/// a pub(crate) test helper. But since we're in an integration test, we
-/// can't access pub(crate) items.
-///
-/// Instead: use oxide-delta's public `build_manifest` to find tensor info,
-/// then construct a modified file by exporting a helper from the crate.
-///
-/// For now, the pragmatic approach: expose `modify_onnx_tensors` as a
-/// test utility.
 fn perturb_last_layer(onnx_bytes: &[u8]) -> Vec<u8> {
     oxide_delta::test_util::modify_onnx_tensors(onnx_bytes, &["w3", "b3"])
+}
+
+/// Modify all tensors to simulate full fine-tuning.
+fn perturb_all_layers(onnx_bytes: &[u8]) -> Vec<u8> {
+    oxide_delta::test_util::modify_onnx_tensors(
+        onnx_bytes,
+        &["w1", "b1", "w2", "b2", "w3", "b3"],
+    )
 }

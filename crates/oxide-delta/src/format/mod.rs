@@ -73,10 +73,11 @@ pub fn try_tensor_delta(base: &[u8], target: &[u8]) -> Result<Option<DeltaPatch>
     let base_manifest = TensorManifest::from_tensors(&base_tensors);
     let target_manifest = TensorManifest::from_tensors(&target_tensors);
 
-    // Build a lookup of base tensors by name
-    let base_by_name: std::collections::HashMap<&str, &TensorInfo> = base_tensors
+    // Index base tensors and their hashes by name
+    let base_by_name: std::collections::HashMap<&str, (&TensorInfo, &[u8; 32])> = base_tensors
         .iter()
-        .map(|t| (t.name.as_str(), t))
+        .zip(base_manifest.entries.iter())
+        .map(|(t, m)| (t.name.as_str(), (t, &m.sha256)))
         .collect();
 
     let base_sha = sha256(base);
@@ -87,14 +88,8 @@ pub fn try_tensor_delta(base: &[u8], target: &[u8]) -> Result<Option<DeltaPatch>
     for (i, target_tensor) in target_tensors.iter().enumerate() {
         let target_hash = &target_manifest.entries[i].sha256;
 
-        if let Some(base_tensor) = base_by_name.get(target_tensor.name.as_str()) {
-            let base_hash = base_manifest
-                .entries
-                .iter()
-                .find(|e| e.name == target_tensor.name)
-                .map(|e| &e.sha256);
-
-            if base_hash == Some(target_hash) {
+        if let Some(&(base_tensor, base_hash)) = base_by_name.get(target_tensor.name.as_str()) {
+            if base_hash == target_hash {
                 // Tensor unchanged — COPY
                 chunks.push(crate::patch::PatchChunk {
                     name: target_tensor.name.clone(),

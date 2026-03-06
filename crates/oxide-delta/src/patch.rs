@@ -51,11 +51,15 @@ pub struct DeltaPatch {
 impl DeltaPatch {
     /// Total encoded size of this patch (approximate wire size).
     pub fn encoded_size(&self) -> usize {
-        // Header overhead + sum of chunk data
-        80 + self
+        // Header: magic(4) + version(1) + strategy(1) + base_sha(32) +
+        //         target_sha(32) + target_size(8) + num_chunks(4) + format(1) = 83
+        83 + self
             .chunks
             .iter()
-            .map(|c| 16 + c.name.len() + c.data.len())
+            .map(|c| {
+                // name_len(2) + name + uncompressed_len(4) + op(1) + data_len(4) + data
+                2 + c.name.len() + 4 + 1 + 4 + c.data.len()
+            })
             .sum::<usize>()
     }
 }
@@ -86,10 +90,6 @@ impl DeltaPatch {
             ModelFormat::SafeTensors => 2,
             ModelFormat::Unknown => 0,
         });
-        // Pad to consistent header size (80 bytes total)
-        // 4 + 1 + 1 + 32 + 32 + 8 + 4 + 1 = 83... let me recalculate
-        // We have 83 bytes so far. Trim padding or adjust.
-        // Actually let's use a simpler variable-length header.
 
         // Chunks
         for chunk in &self.chunks {
