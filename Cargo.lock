@@ -1182,6 +1182,7 @@ dependencies = [
  "axum",
  "chrono",
  "clap",
+ "http-body-util",
  "oxide-control",
  "oxide-core",
  "oxide-models",
@@ -1190,7 +1191,10 @@ dependencies = [
  "oxide-security",
  "serde",
  "serde_json",
+ "sha2",
+ "tempfile",
  "tokio",
+ "tower",
  "tracing",
  "tracing-subscriber",
 ]
