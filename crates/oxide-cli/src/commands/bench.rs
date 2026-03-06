@@ -15,8 +15,7 @@ pub fn execute(
         anyhow::bail!("Model file not found: {}", model_path);
     }
 
-    println!("⚡ Oxide — Benchmark");
-    println!("────────────────────");
+    println!("oxide bench {}", model_path);
 
     let engine = InferenceEngine::new(0);
 
@@ -25,11 +24,11 @@ pub fn execute(
     let info = engine.load_model(path)?;
     let load_time = load_start.elapsed();
 
-    println!("  Model:      {}", info.id);
-    println!("  Format:     {}", info.format);
-    println!("  Size:       {:.2} KB", info.size_bytes as f64 / 1024.0);
-    println!("  Load time:  {:.2?}", load_time);
-    println!("  Threads:    {}", engine.num_threads());
+    println!("  model:      {}", info.id);
+    println!("  format:     {}", info.format);
+    println!("  size:       {:.2} KB", info.size_bytes as f64 / 1024.0);
+    println!("  load time:  {:.2?}", load_time);
+    println!("  threads:    {}", engine.num_threads());
 
     // Determine input shape
     let input_shape: Vec<usize> = if let Some(s) = shape_str {
@@ -48,16 +47,16 @@ pub fn execute(
 
     let input_size: usize = input_shape.iter().product();
     let input_data = vec![0.0f32; input_size];
-    println!("  Input:      {:?} ({} elements)", input_shape, input_size);
+    println!("  input:      {:?} ({} elements)", input_shape, input_size);
 
     // Warmup
-    println!("\n🔥 Warmup ({} iterations)...", warmup);
+    println!("\n  warmup ({} iterations)...", warmup);
     for _ in 0..warmup {
         engine.infer(&info.id, &input_data, &input_shape)?;
     }
 
     // Benchmark
-    println!("📊 Benchmarking ({} iterations)...", iterations);
+    println!("  benchmarking ({} iterations)...", iterations);
     let bench_start = Instant::now();
     for _ in 0..iterations {
         engine.infer(&info.id, &input_data, &input_shape)?;
@@ -66,48 +65,48 @@ pub fn execute(
 
     let metrics = engine.get_metrics(&info.id)?;
 
-    println!("\n📈 Results:");
-    println!("  ──────────────────────────────────────");
-    println!("  Total time:    {:.2?}", bench_time);
+    println!("\n  results");
+    println!("  ────────────────────────────────");
+    println!("  total time:    {:.2?}", bench_time);
     println!(
-        "  Avg latency:   {:.2}us ({:.2}ms)",
+        "  avg latency:   {:.2}us ({:.2}ms)",
         metrics.avg_latency_us,
         metrics.avg_latency_us / 1000.0
     );
     println!(
-        "  P50 latency:   {:.2}us ({:.2}ms)",
+        "  p50 latency:   {:.2}us ({:.2}ms)",
         metrics.p50_latency_us,
         metrics.p50_latency_us / 1000.0
     );
     println!(
-        "  P95 latency:   {:.2}us ({:.2}ms)",
+        "  p95 latency:   {:.2}us ({:.2}ms)",
         metrics.p95_latency_us,
         metrics.p95_latency_us / 1000.0
     );
     println!(
-        "  P99 latency:   {:.2}us ({:.2}ms)",
+        "  p99 latency:   {:.2}us ({:.2}ms)",
         metrics.p99_latency_us,
         metrics.p99_latency_us / 1000.0
     );
     println!(
-        "  Max latency:   {:.2}us ({:.2}ms)",
+        "  max latency:   {:.2}us ({:.2}ms)",
         metrics.max_latency_us,
         metrics.max_latency_us / 1000.0
     );
-    println!("  Throughput:    {:.1} inferences/sec", metrics.throughput_per_sec);
+    println!("  throughput:    {:.1} inferences/sec", metrics.throughput_per_sec);
     println!(
-        "  Total infers:  {} ({} failed)",
+        "  total infers:  {} ({} failed)",
         metrics.total_inferences, metrics.failed_inferences
     );
-    println!("  ──────────────────────────────────────");
+    println!("  ────────────────────────────────");
 
     // Performance assessment
     if metrics.avg_latency_us < 10_000.0 {
-        println!("\n  ✅ Excellent: avg latency < 10ms");
+        println!("\n  avg latency < 10ms — excellent");
     } else if metrics.avg_latency_us < 50_000.0 {
-        println!("\n  ✓ Good: avg latency < 50ms");
+        println!("\n  avg latency < 50ms — good");
     } else {
-        println!("\n  ⚠️ Slow: avg latency > 50ms — consider quantization");
+        println!("\n  avg latency > 50ms — consider quantization");
     }
 
     Ok(())

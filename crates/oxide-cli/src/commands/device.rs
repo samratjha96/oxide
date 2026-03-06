@@ -4,37 +4,34 @@ use oxide_control::registry::DeviceRegistry;
 use oxide_core::device::{Device, DeviceId};
 
 pub fn list() -> anyhow::Result<()> {
-    println!("⚡ Oxide — Registered Devices");
-    println!("────────────────────────────");
-
     let registry = load_registry()?;
     let devices = registry.list()?;
 
     if devices.is_empty() {
-        println!("  No devices registered.");
-        println!("  Use 'oxide device register <id> --name <name>' to register a device.");
+        println!("No devices registered.");
+        println!("Use 'oxide device register <id> --name <name>' to register a device.");
         return Ok(());
     }
 
     println!(
-        "  {:<20} {:<25} {:<10} {:<15}",
-        "ID", "Name", "Status", "Model"
+        "{:<20} {:<25} {:<10} {:<15}",
+        "ID", "NAME", "STATUS", "MODEL"
     );
-    println!("  {}", "─".repeat(70));
+    println!("{}", "─".repeat(70));
 
     for device in &devices {
         let model = device
             .current_model
             .as_ref()
             .map(|m| m.to_string())
-            .unwrap_or_else(|| "none".to_string());
+            .unwrap_or_else(|| "-".to_string());
         println!(
-            "  {:<20} {:<25} {:<10} {:<15}",
+            "{:<20} {:<25} {:<10} {:<15}",
             device.id, device.name, device.status, model
         );
     }
 
-    println!("\n  Total: {} device(s)", devices.len());
+    println!("\n{} device(s)", devices.len());
     Ok(())
 }
 
@@ -42,7 +39,7 @@ pub fn register(id: &str, name: &str) -> anyhow::Result<()> {
     let registry = load_registry()?;
     let device = Device::new(DeviceId::from(id), name);
     registry.register(device)?;
-    println!("✅ Device registered: {} ({})", name, id);
+    println!("registered device '{}' ({})", name, id);
     Ok(())
 }
 
@@ -50,31 +47,30 @@ pub fn status(id: &str) -> anyhow::Result<()> {
     let registry = load_registry()?;
     let device = registry.get(&DeviceId::from(id))?;
 
-    println!("⚡ Oxide — Device Status");
-    println!("───────────────────────");
-    println!("  ID:        {}", device.id);
-    println!("  Name:      {}", device.name);
-    println!("  Status:    {}", device.status);
-    println!("  Platform:  {} / {}", device.platform.os, device.platform.arch);
-    println!("  CPUs:      {}", device.platform.cpu_count);
+    println!("oxide device status {}", id);
+    println!("  id:        {}", device.id);
+    println!("  name:      {}", device.name);
+    println!("  status:    {}", device.status);
+    println!("  platform:  {} / {}", device.platform.os, device.platform.arch);
+    println!("  cpus:      {}", device.platform.cpu_count);
     println!(
-        "  Model:     {}",
+        "  model:     {}",
         device
             .current_model
             .as_ref()
             .map(|m| m.to_string())
-            .unwrap_or_else(|| "none".to_string())
+            .unwrap_or_else(|| "-".to_string())
     );
     println!(
-        "  Fleet:     {}",
+        "  fleet:     {}",
         device
             .fleet_id
             .as_ref()
             .map(|f| f.to_string())
-            .unwrap_or_else(|| "none".to_string())
+            .unwrap_or_else(|| "-".to_string())
     );
     if let Some(hb) = &device.last_heartbeat {
-        println!("  Heartbeat: {}", hb);
+        println!("  heartbeat: {}", hb);
     }
 
     Ok(())

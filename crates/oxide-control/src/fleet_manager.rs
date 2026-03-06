@@ -6,6 +6,7 @@ use oxide_core::fleet::{Fleet, FleetId, RolloutStrategy};
 use oxide_core::model::{ModelId, ModelVersion};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use std::path::PathBuf;
 use std::sync::{Arc, RwLock};
 use tracing::info;
 
@@ -15,6 +16,7 @@ use crate::registry::DeviceRegistry;
 pub struct FleetManager {
     fleets: Arc<RwLock<HashMap<FleetId, Fleet>>>,
     registry: Arc<DeviceRegistry>,
+    persist_path: Option<PathBuf>,
 }
 
 /// Deployment request.
@@ -47,12 +49,35 @@ pub struct DeploymentResult {
 }
 
 impl FleetManager {
-    /// Create a new fleet manager.
+    /// Create a new in-memory fleet manager.
     pub fn new(registry: Arc<DeviceRegistry>) -> Self {
         FleetManager {
             fleets: Arc::new(RwLock::new(HashMap::new())),
             registry,
+            persist_path: None,
         }
+    }
+
+    /// Create a fleet manager with file persistence.
+    pub fn with_persistence(
+        registry: Arc<DeviceRegistry>,
+        path: &std::path::Path,
+    ) -> Result<Self> {
+        let fleets = if path.exists() {
+            let content = std::fs::read_to_string(path)?;
+            let map: HashMap<FleetId, Fleet> = serde_json::from_str(&content)
+                .map_err(|e| OxideError::Serialization(e.to_string()))?;
+            info!("Loaded {} fleets from store", map.len());
+            map
+        } else {
+            HashMap::new()
+        };
+
+        Ok(FleetManager {
+            fleets: Arc::new(RwLock::new(fleets)),
+            registry,
+            persist_path: Some(path.to_path_buf()),
+        })
     }
 
     /// Create a new fleet.
@@ -64,6 +89,9 @@ impl FleetManager {
             OxideError::Internal(format!("Lock poisoned: {}", e))
         })?;
         fleets.insert(id, fleet);
+        drop(fleets);
+
+        self.persist()?;
         Ok(())
     }
 
@@ -101,6 +129,9 @@ impl FleetManager {
 
         fleet.add_device(device_id.clone());
         info!("Added device '{}' to fleet '{}'", device_id, fleet_id);
+        drop(fleets);
+
+        self.persist()?;
         Ok(())
     }
 
@@ -141,14 +172,11 @@ impl FleetManager {
         };
 
         for device_id in &deploy_devices {
-            // Check if device is online
             match self.registry.get(device_id) {
                 Ok(device) => {
                     if device.status == DeviceStatus::Online
                         || device.status == DeviceStatus::Unknown
                     {
-                        // Simulate successful deployment
-                        // In production, this would send the model to the device
                         successful += 1;
                         device_results.push(DeviceDeployResult {
                             device_id: device_id.clone(),
@@ -225,6 +253,17 @@ impl FleetManager {
             unknown,
         })
     }
+
+    fn persist(&self) -> Result<()> {
+        if let Some(path) = &self.persist_path {
+            let fleets = self.fleets.read().map_err(|e| {
+                OxideError::Internal(format!("Lock poisoned: {}", e))
+            })?;
+            let content = serde_json::to_string_pretty(&*fleets)?;
+            std::fs::write(path, content)?;
+        }
+        Ok(())
+    }
 }
 
 /// Summary of fleet health.
@@ -264,11 +303,9 @@ mod tests {
     fn test_add_device_to_fleet() {
         let (registry, manager) = setup();
 
-        // Register a device first
         let device = Device::new(DeviceId::from("pi-01"), "Pi 1");
         registry.register(device).unwrap();
 
-        // Create fleet and add device
         let fleet = Fleet::new(FleetId::from("prod"), "Production");
         manager.create_fleet(fleet).unwrap();
         manager
@@ -283,7 +320,6 @@ mod tests {
     fn test_deploy_all_at_once() {
         let (registry, manager) = setup();
 
-        // Register devices
         for i in 0..5 {
             let mut device = Device::new(
                 DeviceId::from(format!("pi-{:02}", i).as_str()),
@@ -293,14 +329,12 @@ mod tests {
             registry.register(device).unwrap();
         }
 
-        // Create fleet
         let mut fleet = Fleet::new(FleetId::from("prod"), "Production");
         for i in 0..5 {
             fleet.add_device(DeviceId::from(format!("pi-{:02}", i).as_str()));
         }
         manager.create_fleet(fleet).unwrap();
 
-        // Deploy
         let request = DeploymentRequest {
             model_id: ModelId::from("face-detection"),
             model_version: ModelVersion::from("v2.0.0"),
@@ -318,7 +352,6 @@ mod tests {
     fn test_deploy_canary() {
         let (registry, manager) = setup();
 
-        // Register 10 devices
         for i in 0..10 {
             let mut device = Device::new(
                 DeviceId::from(format!("pi-{:02}", i).as_str()),
@@ -334,7 +367,6 @@ mod tests {
         }
         manager.create_fleet(fleet).unwrap();
 
-        // Canary deploy (first stage = 10%)
         let request = DeploymentRequest {
             model_id: ModelId::from("face-detection"),
             model_version: ModelVersion::from("v2.0.0"),
@@ -347,7 +379,7 @@ mod tests {
         };
 
         let result = manager.deploy(&request).unwrap();
-        assert_eq!(result.total_devices, 1); // 10% of 10 = 1
+        assert_eq!(result.total_devices, 1);
         assert_eq!(result.successful, 1);
     }
 
@@ -372,5 +404,31 @@ mod tests {
         assert_eq!(status.total_devices, 2);
         assert_eq!(status.online, 1);
         assert_eq!(status.offline, 1);
+    }
+
+    #[test]
+    fn test_persistence() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let fleet_path = dir.path().join("fleets.json");
+
+        let registry = Arc::new(DeviceRegistry::new());
+
+        // Create and save
+        {
+            let manager =
+                FleetManager::with_persistence(registry.clone(), &fleet_path).unwrap();
+            let fleet = Fleet::new(FleetId::from("prod"), "Production");
+            manager.create_fleet(fleet).unwrap();
+        }
+
+        // Reload and verify
+        {
+            let manager =
+                FleetManager::with_persistence(registry.clone(), &fleet_path).unwrap();
+            let fleets = manager.list_fleets().unwrap();
+            assert_eq!(fleets.len(), 1);
+            let got = manager.get_fleet(&FleetId::from("prod")).unwrap();
+            assert_eq!(got.name, "Production");
+        }
     }
 }

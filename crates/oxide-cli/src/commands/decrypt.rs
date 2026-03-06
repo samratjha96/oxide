@@ -14,7 +14,7 @@ pub fn execute(model_path: &str, output: Option<&str>, key_path: &str) -> anyhow
         anyhow::bail!("Encryption key file not found: {}", key_path);
     }
 
-    println!("🔑 Loading encryption key from: {}", key_path);
+    println!("  loading key from {}", key_path);
     let key = EncryptionKey::load_from_file(key_file)?;
 
     let dest_path = output
@@ -28,9 +28,9 @@ pub fn execute(model_path: &str, output: Option<&str>, key_path: &str) -> anyhow
         });
     let dest = Path::new(&dest_path);
 
-    println!("🔓 Decrypting: {} → {}", model_path, dest_path);
+    println!("oxide decrypt {} -> {}", model_path, dest_path);
     let size = decrypt_model(&key, source, dest)?;
-    println!("✅ Decrypted model: {:.2} KB", size as f64 / 1024.0);
+    println!("  done ({:.2} KB)", size as f64 / 1024.0);
 
     Ok(())
 }

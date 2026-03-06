@@ -42,13 +42,12 @@ pub fn execute(
 
     match (device, fleet) {
         (Some(dev), _) => {
-            println!("⚡ Oxide — Deploying to device");
-            println!("─────────────────────────────");
-            println!("  Model:    {}", model_path);
-            println!("  Size:     {:.2} KB", size as f64 / 1024.0);
-            println!("  SHA-256:  {}...{}", &sha256[..8], &sha256[sha256.len()-8..]);
-            println!("  Device:   {}", dev);
-            println!("  Strategy: {}", rollout);
+            println!("oxide deploy");
+            println!("  model:    {}", model_path);
+            println!("  size:     {:.2} KB", size as f64 / 1024.0);
+            println!("  sha256:   {}...{}", &sha256[..8], &sha256[sha256.len()-8..]);
+            println!("  device:   {}", dev);
+            println!("  strategy: {}", rollout);
             println!();
 
             // Set up OTA work directory
@@ -65,23 +64,22 @@ pub fn execute(
             };
 
             // Stage
-            print!("📦 Staging model...");
+            print!("  staging model...");
             let start = Instant::now();
             let mut state = updater.stage_update(&package, &model_data)?;
             println!(" done ({:.2?})", start.elapsed());
 
             // Verify
-            print!("🔍 Verifying integrity...");
-            println!(" ✓ SHA-256 match");
+            println!("  verifying integrity... ok (sha-256 match)");
 
             // Apply
-            print!("🚀 Applying update...");
+            print!("  applying update...");
             let start = Instant::now();
             let active_path = updater.apply_update(&mut state)?;
             println!(" done ({:.2?})", start.elapsed());
 
             // Health check: load the model and run a test inference
-            print!("💚 Running health check...");
+            print!("  health check...");
             let start = Instant::now();
             let engine = InferenceEngine::new(0);
             let info = engine.load_model(&active_path)?;
@@ -93,25 +91,23 @@ pub fn execute(
             let input_size: usize = input_shape.iter().product();
             let input_data = vec![0.0f32; input_size];
             let result = engine.infer(&info.id, &input_data, &input_shape)?;
-            println!(" ✓ passed ({:.2?}, {} outputs)", start.elapsed(), result.outputs.len());
+            println!(" passed ({:.2?}, {} outputs)", start.elapsed(), result.outputs.len());
 
             println!();
-            println!("✅ Model deployed to device '{}'", dev);
-            println!("   Active model path: {}", active_path.display());
+            println!("  deployed to '{}'", dev);
+            println!("  active model: {}", active_path.display());
         }
         (_, Some(fl)) => {
-            println!("⚡ Oxide — Deploying to fleet");
-            println!("────────────────────────────");
-            println!("  Model:    {}", model_path);
-            println!("  Size:     {:.2} KB", size as f64 / 1024.0);
-            println!("  SHA-256:  {}...{}", &sha256[..8], &sha256[sha256.len()-8..]);
-            println!("  Fleet:    {}", fl);
-            println!("  Strategy: {}", rollout);
+            println!("oxide deploy");
+            println!("  model:    {}", model_path);
+            println!("  size:     {:.2} KB", size as f64 / 1024.0);
+            println!("  sha256:   {}...{}", &sha256[..8], &sha256[sha256.len()-8..]);
+            println!("  fleet:    {}", fl);
+            println!("  strategy: {}", rollout);
             println!();
-            println!("📦 Staging model for fleet deployment...");
-            println!("✓ Model staged");
-            println!("🚀 Rolling out to fleet with strategy: {}", rollout);
-            println!("✅ Fleet deployment initiated for '{}'", fl);
+            println!("  staging model for fleet deployment... done");
+            println!("  rolling out to fleet ({})...", rollout);
+            println!("  fleet deployment initiated for '{}'", fl);
         }
         (None, None) => {
             anyhow::bail!("Specify either --device or --fleet for deployment target");

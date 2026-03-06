@@ -11,7 +11,7 @@ use tracing_subscriber::EnvFilter;
 #[derive(Parser)]
 #[command(
     name = "oxide",
-    about = "⚡ Oxide — Deploy intelligence at the speed of rust",
+    about = "Edge AI runtime — deploy ONNX models to resource-constrained devices",
     long_about = "Lightweight, secure edge AI runtime for deploying models to resource-constrained devices.",
     version
 )]

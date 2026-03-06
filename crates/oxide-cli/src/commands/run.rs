@@ -15,19 +15,19 @@ pub fn execute(
         anyhow::bail!("Model file not found: {}", model_path);
     }
 
-    println!("⚡ Oxide — Loading model: {}", model_path);
+    println!("oxide run {}", model_path);
     let engine = InferenceEngine::new(0);
 
     let start = Instant::now();
     let info = engine.load_model(path)?;
     let load_time = start.elapsed();
 
-    println!("✓ Model loaded in {:.2?}", load_time);
-    println!("  ID:      {}", info.id);
-    println!("  Format:  {}", info.format);
-    println!("  Size:    {:.2} KB", info.size_bytes as f64 / 1024.0);
-    println!("  Inputs:  {:?}", info.inputs.iter().map(|i| format!("{}:{:?}", i.name, i.shape)).collect::<Vec<_>>());
-    println!("  Outputs: {:?}", info.outputs.iter().map(|o| format!("{}:{:?}", o.name, o.shape)).collect::<Vec<_>>());
+    println!("  loaded in {:.2?}", load_time);
+    println!("  id:      {}", info.id);
+    println!("  format:  {}", info.format);
+    println!("  size:    {:.2} KB", info.size_bytes as f64 / 1024.0);
+    println!("  inputs:  {:?}", info.inputs.iter().map(|i| format!("{}:{:?}", i.name, i.shape)).collect::<Vec<_>>());
+    println!("  outputs: {:?}", info.outputs.iter().map(|o| format!("{}:{:?}", o.name, o.shape)).collect::<Vec<_>>());
 
     // Parse input data
     let (input_data, input_shape) = if let Some(json) = input_json {
@@ -52,12 +52,12 @@ pub fn execute(
             .collect();
         let size: usize = shape.iter().product();
         let data = vec![0.0f32; size];
-        println!("  Using zero input with shape {:?}", shape);
+        println!("  using zero input with shape {:?}", shape);
         (data, shape)
     };
 
     // Run inference
-    println!("\n🔥 Running {} inference iteration(s)...", iterations);
+    println!("\n  running {} iteration(s)...", iterations);
     let mut total_time = std::time::Duration::ZERO;
 
     for i in 0..iterations {
@@ -68,16 +68,16 @@ pub fn execute(
 
         if iterations == 1 || i == iterations - 1 {
             println!(
-                "  Iteration {}: {:.2?} ({:.2}us)",
+                "  iteration {}: {:.2?} ({:.2}us)",
                 i + 1,
                 elapsed,
                 elapsed.as_secs_f64() * 1_000_000.0
             );
             if result.outputs.len() <= 20 {
-                println!("  Output: {:?}", result.outputs);
+                println!("  output: {:?}", result.outputs);
             } else {
                 println!(
-                    "  Output: [{:.4}, {:.4}, ... {} values total]",
+                    "  output: [{:.4}, {:.4}, ... {} values]",
                     result.outputs[0],
                     result.outputs[1],
                     result.outputs.len()
@@ -89,16 +89,15 @@ pub fn execute(
     if iterations > 1 {
         let avg = total_time / iterations as u32;
         let metrics = engine.get_metrics(&info.id)?;
-        println!("\n📊 Benchmark Results ({} iterations):", iterations);
-        println!("  Total time: {:.2?}", total_time);
-        println!("  Avg time:   {:.2?}", avg);
-        println!("  P50:        {:.2}us", metrics.p50_latency_us);
-        println!("  P95:        {:.2}us", metrics.p95_latency_us);
-        println!("  P99:        {:.2}us", metrics.p99_latency_us);
-        println!("  Throughput: {:.1} inferences/sec", metrics.throughput_per_sec);
+        println!("\n  results ({} iterations):", iterations);
+        println!("    total:      {:.2?}", total_time);
+        println!("    avg:        {:.2?}", avg);
+        println!("    p50:        {:.2}us", metrics.p50_latency_us);
+        println!("    p95:        {:.2}us", metrics.p95_latency_us);
+        println!("    p99:        {:.2}us", metrics.p99_latency_us);
+        println!("    throughput: {:.1} inferences/sec", metrics.throughput_per_sec);
     }
 
-    println!("\n✅ Done.");
     Ok(())
 }
 

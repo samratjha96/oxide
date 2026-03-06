@@ -7,8 +7,8 @@ use std::sync::Arc;
 use tracing::info;
 
 pub async fn execute(host: &str, port: u16) -> anyhow::Result<()> {
-    println!("⚡ Oxide Control Plane");
-    println!("─────────────────────");
+    println!("oxide control plane");
+    println!("───────────────────");
 
     let data_dir = std::env::current_dir()?.join(".oxide");
     std::fs::create_dir_all(&data_dir)?;

@@ -9,27 +9,24 @@ pub fn execute(model_path: &str) -> anyhow::Result<()> {
         anyhow::bail!("Model file not found: {}", model_path);
     }
 
-    println!("⚡ Oxide — Model Info");
-    println!("─────────────────────");
-
     let model = OnnxModel::load(path)?;
     let info = model.info();
 
-    println!("  File:          {}", model_path);
-    println!("  ID:            {}", info.id);
-    println!("  Version:       {}", info.version);
-    println!("  Format:        {}", info.format);
-    println!("  Size:          {:.2} KB ({} bytes)", info.size_bytes as f64 / 1024.0, info.size_bytes);
-    println!("  Quantization:  {}", info.quantization);
+    println!("oxide info {}", model_path);
+    println!("  id:            {}", info.id);
+    println!("  version:       {}", info.version);
+    println!("  format:        {}", info.format);
+    println!("  size:          {:.2} KB ({} bytes)", info.size_bytes as f64 / 1024.0, info.size_bytes);
+    println!("  quantization:  {}", info.quantization);
 
-    println!("\n  Inputs:");
+    println!("  inputs:");
     for input in &info.inputs {
-        println!("    - {} {:?} ({})", input.name, input.shape, input.dtype);
+        println!("    {} {:?} ({})", input.name, input.shape, input.dtype);
     }
 
-    println!("\n  Outputs:");
+    println!("  outputs:");
     for output in &info.outputs {
-        println!("    - {} {:?} ({})", output.name, output.shape, output.dtype);
+        println!("    {} {:?} ({})", output.name, output.shape, output.dtype);
     }
 
     Ok(())

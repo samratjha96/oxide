@@ -13,10 +13,10 @@ pub fn execute(model_path: &str, output: Option<&str>, key_path: &str) -> anyhow
 
     // Load or generate key
     let key = if key_file.exists() {
-        println!("🔑 Loading encryption key from: {}", key_path);
+        println!("  loading key from {}", key_path);
         EncryptionKey::load_from_file(key_file)?
     } else {
-        println!("🔑 Generating new encryption key: {}", key_path);
+        println!("  generating new key: {}", key_path);
         let key = EncryptionKey::generate();
         key.save_to_file(key_file)?;
         key
@@ -27,9 +27,9 @@ pub fn execute(model_path: &str, output: Option<&str>, key_path: &str) -> anyhow
         .unwrap_or_else(|| format!("{}.enc", model_path));
     let dest = Path::new(&dest_path);
 
-    println!("🔒 Encrypting: {} → {}", model_path, dest_path);
+    println!("oxide encrypt {} -> {}", model_path, dest_path);
     let size = encrypt_model(&key, source, dest)?;
-    println!("✅ Encrypted model: {:.2} KB", size as f64 / 1024.0);
+    println!("  done ({:.2} KB)", size as f64 / 1024.0);
 
     Ok(())
 }
