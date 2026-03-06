@@ -1,0 +1,27 @@
+[package]
+name = "oxide-cli"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "CLI for the Oxide edge AI runtime"
+
+[[bin]]
+name = "oxide"
+path = "src/main.rs"
+
+[dependencies]
+oxide-core = { workspace = true }
+oxide-runtime = { workspace = true }
+oxide-models = { workspace = true }
+oxide-security = { workspace = true }
+oxide-network = { workspace = true }
+oxide-control = { workspace = true }
+clap = { workspace = true }
+tokio = { workspace = true }
+axum = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+anyhow = { workspace = true }
+chrono = { workspace = true }

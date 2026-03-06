@@ -1,0 +1,24 @@
+[package]
+name = "oxide-control"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Control plane and fleet management for the Oxide edge AI runtime"
+
+[dependencies]
+oxide-core = { workspace = true }
+oxide-network = { workspace = true }
+oxide-security = { workspace = true }
+tokio = { workspace = true }
+axum = { workspace = true }
+tower = { workspace = true }
+tower-http = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+tracing = { workspace = true }
+thiserror = { workspace = true }
+chrono = { workspace = true }
+uuid = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }

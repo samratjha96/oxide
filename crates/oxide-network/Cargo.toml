@@ -1,0 +1,28 @@
+[package]
+name = "oxide-network"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Networking, mTLS, and OTA updates for the Oxide edge AI runtime"
+
+[dependencies]
+oxide-core = { workspace = true }
+oxide-security = { workspace = true }
+tokio = { workspace = true }
+axum = { workspace = true }
+tower = { workspace = true }
+tower-http = { workspace = true }
+rustls = { workspace = true }
+tokio-rustls = { workspace = true }
+rcgen = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+tracing = { workspace = true }
+thiserror = { workspace = true }
+chrono = { workspace = true }
+flate2 = { workspace = true }
+sha2 = { workspace = true }
+bytes = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }
