@@ -18,29 +18,162 @@ subset of those tensors by small amounts.
 
 ## Evidence
 
-Simulated fine-tuning of MLP-MNIST (2 MB, 535K params), 10% of weights
-perturbed:
+All numbers measured against MLP-MNIST (2 MB, 535K params, 6 tensors).
+
+### Naive merkle trees don't work for ML models
+
+Block-level hashing (the merkle approach) fails when changes are sparse
+but spread across all blocks — which is exactly what happens during
+fine-tuning:
 
 ```
-Original model (v1):           2,143,752 bytes
-Updated model (v2):            2,143,752 bytes
-v2 compressed (standalone):    1,977,128 bytes  (92.2%)
-v2 delta (zstd --patch-from):    221,536 bytes  (10.3%)
+Scenario: All layers, 5% of weights perturbed
 
-Bandwidth saved with delta:   89.7%
-
-At 1000 devices:
-  Full push:  2,044 MB
-  Delta push:    211 MB
+  Actual bytes changed:     87,721 / 2,143,752 (4.1%)
+  Naive merkle (4KB blocks):
+    Dirty blocks: 524 / 524 (100%)  ← EVERY block is dirty
+    Must ship:    2,143,752 bytes   ← zero savings
 ```
 
-Even generic binary delta (zstd patch-from) gets 90% savings. ML-aware
-delta — diffing at the tensor level — can do better by:
-- Skipping unchanged tensors entirely (zero bytes for unchanged layers)
-- Quantizing weight diffs (if a weight changed by 0.001, we don't need
-  full float32 precision for the delta)
-- Compressing per-tensor rather than per-file (better compression ratios
-  when data within a tensor is homogeneous)
+Even though only 4.1% of bytes changed, because the changes are scattered
+across all tensors, every 4KB block contains at least one changed float.
+A merkle tree at the block level sees everything as dirty.
+
+### What works: XOR delta + compression
+
+The changed bytes are sparse within each block. XOR delta (base ⊕ target)
+produces a mostly-zero byte stream that compresses extremely well:
+
+```
+Approach comparison (all layers, 5% change):
+
+  Full file:                     2,143,752 bytes  (100.0%)
+  Naive merkle 4KB:              2,143,752 bytes  (100.0%)  ← useless
+  Merkle + XOR compressed:         150,350 bytes  (  7.0%)
+  zstd --patch-from:               116,643 bytes  (  5.4%)
+  Tensor XOR compressed:           150,342 bytes  (  7.0%)
+```
+
+### Tensor-level hashing wins for structured changes
+
+When changes are localized to specific layers (transfer learning, layer
+freezing), tensor-level hashing dominates — skip entire unchanged tensors:
+
+```
+Scenario: Transfer learning (last layer only)
+
+  Tensor inventory:
+    w1 (1,605,632 bytes)  ca1fa7e41969 → ca1fa7e41969  [SAME]
+    b1 (    2,048 bytes)  e5a00aa9991a → e5a00aa9991a  [SAME]
+    w2 (  524,288 bytes)  65c87efb4860 → 65c87efb4860  [SAME]
+    b2 (    1,024 bytes)  5f70bf18a086 → 5f70bf18a086  [SAME]
+    w3 (   10,240 bytes)  1e8ef38f558c → 0e7432db6cc7  [DIFF]
+    b3 (       40 bytes)  2c34ce1df23b → 113128c3f695  [DIFF]
+
+  Full file:         2,143,752 bytes  (100.0%)
+  Tensor XOR delta:      9,224 bytes  (  0.4%)  ← 99.6% savings
+```
+
+### Neither approach wins universally
+
+```
+Scenario                            Full    zstd Δ  Tensor Δ  Winner
+──────────────────────────────  ────────  ────────  ────────  ──────
+Transfer learning (last layer)    2094K       10K       9K   tensor
+Last 2 layers retrained           2094K      484K     468K   tensor
+All layers, 5% perturb            2094K      121K     154K   zstd
+All layers, 20% perturb           2094K      443K     535K   zstd
+All layers, 50% perturb           2094K     1040K    1175K   zstd
+Full retrain                      2094K     1942K    1981K   zstd
+```
+
+**Tensor-level wins** for structured changes (transfer learning, layer
+freezing). **Binary delta wins** for diffuse changes (full fine-tuning,
+distillation). The right strategy: compute both, ship whichever is smaller.
+
+### Worst case: full retrain
+
+When the model is completely retrained (100% of weights change), delta
+compression still saves ~7% via zstd's dictionary matching. But the real
+answer is: **that's fine**. Full retrains are rare. The common case — daily
+fine-tuning, A/B weight experiments, quantization adjustments — is where
+90%+ savings happen.
+
+The protocol gracefully degrades: if the delta is larger than the full
+file, just ship the full file. The agent doesn't care.
+
+## Why This Matters: Real-World Numbers
+
+### The bandwidth problem is severe on cellular IoT
+
+Most edge ML fleets connect over LTE Cat-M1 or NB-IoT:
+
+| Network    | Real-world throughput | 100 MB download time | Cost per GB      |
+|------------|----------------------|----------------------|------------------|
+| Cat-M1     | ~300 kbps            | ~45 minutes          | $5–30/GB         |
+| NB-IoT     | ~26–127 kbps         | 2–8 hours            | $5–50/GB         |
+| WiFi/Eth   | 10+ Mbps             | seconds              | ~free            |
+
+At $5–30/GB (Hologram, 1NCE, carrier IoT plans), pushing a 100 MB model
+to 1,000 devices costs **$500–$3,000 per update** in cellular data alone.
+With delta updates at 10% of file size, that drops to $50–$300.
+
+For a company doing weekly model updates, that's $25K–$150K/year in
+cellular data savings — from one feature.
+
+### Edge vision models are not small
+
+| Model              | ONNX size (fp32) | Typical use case            |
+|--------------------|-----------------:|-----------------------------| 
+| YOLOv8-nano        |         ~12 MB   | Real-time object detection  |
+| MobileNetV3-Large  |         ~22 MB   | Image classification        |
+| EfficientNet-Lite0 |         ~20 MB   | Efficient classification    |
+| YOLOv8-small       |         ~45 MB   | Higher-accuracy detection   |
+| ResNet-50          |        ~100 MB   | Feature extraction          |
+| BERT-base          |        ~440 MB   | NLP on edge                 |
+
+These are the small, edge-optimized models. Production models with custom
+heads, ensembles, or domain-specific architectures are often 200–500 MB.
+
+### No one is solving this
+
+Research findings (March 2026):
+
+**Existing OTA tools don't understand ML models:**
+- Mender, RAUC, SWUpdate — filesystem/partition-level updates, treat
+  models as opaque blobs. Mender has binary delta (mender-binary-delta)
+  but it's an add-on, not ML-aware.
+- Balena — container-based, proprietary delta for Docker layers. Not
+  applicable to model files inside containers.
+
+**Cloud ML platforms stop at "push container":**
+- Azure IoT Edge, AWS Greengrass, NVIDIA Fleet Command — deploy Docker
+  containers. No model-level delta. No bandwidth optimization.
+- <70% of Edge AI projects stall in pilot phase partly due to deployment
+  operational hurdles.
+
+**Edge ML platforms don't do OTA:**
+- Edge Impulse — model training and optimization, some fleet management,
+  but no delta updates.
+- TFLite, ONNX Runtime — inference only, zero deployment tooling.
+
+**No one does tensor-level diffing:**
+- Google Chrome's Courgette achieves 89% smaller patches than bsdiff by
+  understanding executable structure — but it's specific to compiled code
+  (disassembly + address normalization). Not applicable to weight tensors.
+- There are Rust crates for binary delta (bsdiff-rs, bidiff) but none that
+  understand ML model internals.
+- SafeTensors (Hugging Face) has a simpler structure than ONNX (JSON header
+  + flat tensor data, no protobuf) — even easier to diff at tensor level.
+  Supporting it alongside ONNX is straightforward.
+
+**The gap is real.** Companies doing edge ML are either:
+1. Shipping full model files every time (expensive, slow)
+2. Building custom deployment scripts (fragile, unmaintained)
+3. Using cloud platform containers (heavy, no model awareness)
+
+None of these handle the "I fine-tuned the last layer, deploy to 1,000
+cameras" case efficiently.
 
 ## Positioning
 
@@ -60,7 +193,7 @@ Oxide drops:
 - Pretending to compete with tract/onnxruntime/TFLite on inference
 
 Oxide adds:
-- Delta updates (tensor-level and binary-level)
+- Delta updates (tensor-level AND binary-level, pick smaller)
 - Model format awareness (ONNX protobuf structure)
 - Bandwidth monitoring and reporting
 - Update campaigns with progress tracking
@@ -90,11 +223,13 @@ Control Plane                              Device Agent
 │   + delta cache  │ ──────────────────→│  + delta apply   │
 │                  │  ~10% of N bytes   │  + reconstruction│
 │ Delta Engine     │                    │  + verify full   │
-│   (tensor diff)  │                    │                  │
-│                  │  ←── heartbeat ──  │ Model Inventory  │
-│ Registry         │  (current version) │ (what's on disk) │
+│   (tensor diff   │                    │                  │
+│    + binary diff  │  ←── heartbeat ── │ Model Inventory  │
+│    pick smaller) │  (tensor hashes)   │ (what's on disk) │
+│                  │                    │                  │
+│ Registry         │                    │ [user's runtime] │
 │ Fleet Mgr        │                    │                  │
-│ Campaign Tracker │                    │ [user's runtime] │
+│ Campaign Tracker │                    │                  │
 └──────────────────┘                    └──────────────────┘
 ```
 
@@ -105,122 +240,176 @@ Control Plane                              Device Agent
    checks become user-supplied hooks (a script or binary that the agent
    calls post-update).
 
-2. **Add `oxide-delta` crate.** Computes and applies model diffs:
-   - Level 0: zstd `--patch-from` (binary delta, no ML knowledge)
-   - Level 1: ONNX-aware — diff individual tensors, skip unchanged ones
-   - Level 2: Quantized tensor diffs (future — lossy compression of
-     weight deltas within user-specified tolerance)
+2. **Add `oxide-delta` crate.** Two delta strategies, best wins:
 
-3. **Control plane computes deltas on upload.** When you upload v2, the
-   server diffs it against v1 and caches the patch. Devices request
-   deltas, not full files.
+   **Strategy A: Tensor-level delta** (ML-aware)
+   - Parse ONNX protobuf to extract tensor boundaries
+   - Hash each tensor (SHA-256) — this is the "merkle" layer
+   - For matching tensors: emit COPY chunk (zero bytes)
+   - For different tensors: emit XOR delta, zstd-compressed
+   - Best for: transfer learning, layer freezing, targeted changes
 
-4. **Agent tracks local model inventory.** Instead of downloading
-   whatever is assigned, the agent reports what it has and the control
-   plane tells it the minimal path to the target version.
+   **Strategy B: Binary delta** (format-agnostic)
+   - zstd `--patch-from` style dictionary compression
+   - No format knowledge needed — works on any file
+   - Best for: diffuse fine-tuning where all weights shift slightly
 
-5. **Campaign tracker.** A deployment is now a "campaign" — tracks
-   per-device progress (downloading / applying / verifying / complete /
-   failed), overall rollout percentage, and can pause/resume/abort.
+   Control plane computes both, caches the smaller one.
 
-## Delta Format
+3. **Agent sends tensor manifest in heartbeat.** The agent reports
+   per-tensor SHA-256 hashes (192 bytes for a 6-tensor model). The
+   control plane uses this to determine the minimal delta.
 
-### oxide-delta patch format (v1)
+4. **Campaign tracker.** A deployment is a "campaign" with per-device
+   progress tracking, pause/resume/abort.
+
+## Delta Strategies in Detail
+
+### Strategy A: Tensor-Level Delta
+
+The "merkle tree" — but at the tensor level, not the block level.
+
+Why not block-level merkle? Because ML weight changes are sparse within
+blocks. A 4KB block containing 1024 floats where 50 changed (5%) still
+hashes differently. You'd ship the whole block. With tensor-level
+granularity, you skip entire unchanged tensors (often the largest ones).
+
+```
+Agent manifest:              Target manifest:
+  w1: ca1fa7e4...              w1: ca1fa7e4...  ← SAME, skip
+  b1: e5a00aa9...              b1: e5a00aa9...  ← SAME, skip
+  w2: 65c87efb...              w2: 65c87efb...  ← SAME, skip
+  b2: 5f70bf18...              b2: 5f70bf18...  ← SAME, skip
+  w3: 1e8ef38f...              w3: 0e7432db...  ← DIFF, ship delta
+  b3: 2c34ce1d...              b3: 113128c3...  ← DIFF, ship delta
+
+Delta payload: XOR(w3_old, w3_new) + XOR(b3_old, b3_new), zstd compressed
+Result: 9,224 bytes instead of 2,143,752 (99.6% savings)
+```
+
+For changed tensors, the XOR delta is sparse (mostly zeros where weights
+didn't change) and compresses extremely well.
+
+### Strategy B: Binary Delta
+
+Standard dictionary-based delta compression. The control plane uses the
+base version as a zstd dictionary to compress the target version. No
+format knowledge needed.
+
+This wins when changes are spread uniformly across all tensors (common
+with learning rate warm-up, batch normalization updates, or full
+fine-tuning passes) because there are no "clean" tensors to skip.
+
+### Decision logic (on the control plane)
+
+```
+on model upload(model_id, version, bytes):
+    for each previous version:
+        delta_a = tensor_level_delta(prev_bytes, bytes)  // may fail if not ONNX
+        delta_b = binary_delta(prev_bytes, bytes)
+        
+        best = min(delta_a, delta_b, bytes)  // pick smallest, including full file
+        cache(model_id, prev_version → version, best)
+```
+
+## Download Protocol
+
+### Request
+
+```
+GET /api/v1/models/{id}/versions/{ver}/download
+X-Oxide-Base-Version: v1.0.0
+X-Oxide-Base-SHA256: abc123...
+X-Oxide-Tensor-Manifest: w1=ca1fa7e4...,b1=e5a00aa9...,...
+```
+
+The tensor manifest is optional. Without it, the server can still serve
+binary deltas (strategy B). With it, the server can compute tensor-level
+deltas on the fly if not cached.
+
+### Response (delta available)
+
+```
+200 OK
+Content-Type: application/x-oxide-delta
+X-Oxide-Delta-Strategy: tensor | binary
+X-Oxide-Delta-Base: v1.0.0
+X-Oxide-Target-SHA256: def456...
+X-Oxide-Target-Size: 2143752
+
+body = delta patch bytes
+```
+
+### Response (no delta, or full file is smaller)
+
+```
+200 OK
+Content-Type: application/octet-stream
+X-Oxide-SHA256: def456...
+
+body = full model bytes
+```
+
+Fully backward compatible. Old agents without the headers get full files.
+
+## Patch Format (OXDL v1)
 
 ```
 ┌─────────────────────────────────────────┐
-│ Header (32 bytes)                       │
-│   magic: "OXDL"                         │
+│ Header (80 bytes)                       │
+│   magic: "OXDL" (4 bytes)              │
 │   version: u8                           │
-│   base_sha256: [u8; 32]                 │
-│   target_sha256: [u8; 32]               │
+│   strategy: u8 (0=binary, 1=tensor)    │
+│   base_sha256: [u8; 32]                │
+│   target_sha256: [u8; 32]              │
 │   target_size: u64                      │
 │   num_chunks: u32                       │
 │   compression: u8 (0=none, 1=zstd)     │
+│   reserved: [u8; 3]                     │
 ├─────────────────────────────────────────┤
 │ Chunk 0                                 │
-│   offset: u64                           │
-│   length: u32                           │
-│   type: u8 (0=copy, 1=replace, 2=xor)  │
-│   data: [u8; ...] (compressed)          │
+│   name_len: u16                         │
+│   name: [u8; name_len]  (tensor name)  │
+│   offset: u64  (in target file)        │
+│   length: u32  (uncompressed)          │
+│   op: u8 (0=COPY, 1=REPLACE, 2=XOR)   │
+│   data_len: u32 (compressed, 0 for COPY)│
+│   data: [u8; data_len]                 │
 ├─────────────────────────────────────────┤
-│ Chunk 1                                 │
-│   ...                                   │
-├─────────────────────────────────────────┤
-│ ...                                     │
+│ Chunk 1...                              │
 └─────────────────────────────────────────┘
 ```
 
-**Chunk types:**
-- `copy`: this region is identical in base and target — zero bytes in patch
-- `replace`: this region is entirely new — raw (compressed) bytes
-- `xor`: this region differs — XOR delta (compressed), applied against base
+**Chunk operations:**
+- `COPY`: This region is identical in base and target. Zero data bytes.
+  Device copies from base file at the given offset.
+- `REPLACE`: This region is entirely new. Data contains the raw
+  (compressed) target bytes. Used for new tensors or non-tensor regions.
+- `XOR`: This region differs. Data contains `base[offset..] ⊕ target[offset..]`,
+  compressed. Device XORs against its base to reconstruct target.
 
-For ONNX-aware mode, chunks align to tensor boundaries (parsed from the
-protobuf structure), so unchanged tensors produce `copy` chunks.
+For tensor-level patches, each chunk corresponds to one tensor.
+For binary patches, chunks are arbitrary byte ranges.
 
-### Delta computation
-
-```
-fn compute_delta(base: &[u8], target: &[u8]) -> Patch:
-    1. Parse both as ONNX protobuf (if possible, fall back to binary)
-    2. For each tensor in target:
-       a. If tensor exists in base with identical bytes → COPY chunk
-       b. If tensor exists but differs → XOR chunk (compressed)
-       c. If tensor is new → REPLACE chunk
-    3. Handle non-tensor regions (graph structure) as binary diff
-    4. Compress each chunk with zstd
-    5. Write patch file
-```
-
-### Delta application (on device)
+## Application on Device
 
 ```
 fn apply_delta(base_path: &Path, patch: &[u8]) -> Result<Vec<u8>>:
-    1. Read base file
-    2. Verify base_sha256 matches header
+    1. Parse header, verify base_sha256 matches local file
+    2. Read base file into memory
     3. Allocate target buffer (target_size from header)
     4. For each chunk:
-       - COPY: memcpy from base at offset
-       - REPLACE: write chunk data at offset
-       - XOR: xor chunk data with base at offset
-    5. Verify target_sha256
-    6. Return target bytes
+       COPY:    memcpy from base at offset for length bytes
+       REPLACE: decompress chunk data, write at offset
+       XOR:     decompress chunk data, XOR with base at offset, write
+    5. Verify target_sha256 of reconstructed file
+    6. Write to staging (existing OTA pipeline takes over)
 ```
 
-## Download protocol change
+Step 5 is critical: if reconstruction produces the wrong SHA-256,
+something went wrong. Discard and fall back to full download.
 
-### Current
-```
-Agent: GET /models/{id}/versions/{ver}/download
-Server: 200 OK, body = full model bytes
-```
-
-### Proposed
-```
-Agent: GET /models/{id}/versions/{ver}/download
-        X-Oxide-Base-Version: v1.0.0
-        X-Oxide-Base-SHA256: abc123...
-
-Server (if delta available):
-        200 OK
-        Content-Type: application/x-oxide-delta
-        X-Oxide-Delta-Base: v1.0.0
-        X-Oxide-Target-SHA256: def456...
-        body = delta patch bytes
-
-Server (if no delta, or agent has no base):
-        200 OK
-        Content-Type: application/octet-stream
-        X-Oxide-SHA256: def456...
-        body = full model bytes
-```
-
-The agent sends what it has. The server responds with the smallest
-possible payload. Fully backward compatible — old agents without the
-header get full files.
-
-## Campaign tracking
+## Campaign Tracking
 
 A campaign replaces the current fire-and-forget deploy.
 
@@ -236,14 +425,18 @@ struct Campaign {
 
     // Per-device tracking
     devices: HashMap<DeviceId, DeviceUpdateState>,
+
+    // Bandwidth stats
+    total_bytes_served: u64,
+    total_bytes_saved_by_delta: u64,
 }
 
 enum DeviceUpdateState {
     Pending,
-    Downloading { started_at: DateTime<Utc>, bytes_downloaded: u64 },
+    Downloading { started_at: DateTime<Utc>, bytes_total: u64, delta_strategy: String },
     Applying,
     Verifying,
-    Complete { completed_at: DateTime<Utc>, delta_bytes: u64 },
+    Complete { completed_at: DateTime<Utc>, bytes_downloaded: u64, delta_ratio: f64 },
     Failed { error: String, attempts: u32 },
     Skipped { reason: String },  // already on target version
 }
@@ -257,9 +450,10 @@ POST  /api/v1/campaigns/:id/pause          Pause rollout
 POST  /api/v1/campaigns/:id/resume         Resume rollout
 POST  /api/v1/campaigns/:id/abort          Abort (leave devices as-is)
 GET   /api/v1/campaigns/:id/devices        Detailed per-device breakdown
+GET   /api/v1/campaigns/:id/bandwidth      Bandwidth savings report
 ```
 
-## Health check hooks
+## Health Check Hooks
 
 Instead of Oxide running inference, the user supplies a health check:
 
@@ -279,14 +473,28 @@ This lets users:
 - Verify the model integrates with their application
 - Do hardware-specific validation (GPU load, memory usage)
 
-## Implementation plan
+## Implementation Plan
 
-### Phase 1: Delta engine (oxide-delta crate)
-- [ ] Binary delta: zstd --patch-from equivalent in pure Rust
-- [ ] ONNX parser: extract tensor boundaries from protobuf
-- [ ] Tensor-level diff: copy/replace/xor chunks aligned to tensors
-- [ ] Patch format: write and read the OXDL format
-- [ ] Tests: round-trip with real ONNX models, verify exact reconstruction
+### Phase 1: oxide-delta crate
+
+Rust dependencies:
+- `prost` — ONNX protobuf parsing (generate from onnx.proto3)
+- `zstd` — compression for binary delta strategy
+- `sha2` — already in workspace, SHA-256 for manifests and verification
+- `bsdiff-rs` or hand-rolled XOR — for tensor-level chunk deltas
+  (XOR is simpler and sufficient since we control both sides)
+
+Tasks:
+- [ ] ONNX protobuf parser: extract tensor names, offsets, sizes, raw data
+- [ ] SafeTensors parser: JSON header + flat tensor extraction (simpler)
+- [ ] Tensor manifest: compute per-tensor SHA-256 hashes
+- [ ] Strategy A: tensor-level XOR delta (COPY/XOR chunks per tensor)
+- [ ] Strategy B: binary delta (zstd dictionary compression)
+- [ ] Patch format: write and read OXDL v1
+- [ ] `compute_delta(base, target) -> Patch` — tries both, picks smaller
+- [ ] `apply_delta(base, patch) -> target` — reconstruct + verify SHA-256
+- [ ] Tests: round-trip every scenario with real ONNX models
+- [ ] Benchmark: measure delta computation time (must be <5s for 500 MB model)
 
 ### Phase 2: Control plane integration
 - [ ] Delta cache: compute and store deltas on model upload
@@ -296,11 +504,11 @@ This lets users:
 - [ ] Bandwidth tracking: log bytes served per device per campaign
 
 ### Phase 3: Agent updates
-- [ ] Delta-aware download: send base version in headers
+- [ ] Delta-aware download: send base version + tensor manifest in headers
 - [ ] Delta application: reconstruct target from base + patch
+- [ ] Fallback: if delta reconstruction fails SHA-256 check, download full
 - [ ] Health check hooks: call user-supplied command instead of inference
 - [ ] Campaign reporting: report download/apply/verify progress per heartbeat
-- [ ] Model inventory: track all versions on disk, report to control plane
 
 ### Phase 4: Drop inference wrapper
 - [ ] Remove oxide-models dependency from oxide-cli agent
@@ -315,25 +523,30 @@ This lets users:
 - [ ] Horizontal scaling (stateless control plane + shared DB)
 - [ ] Prometheus metrics endpoint
 
-## Success metrics
+## Success Metrics
 
-1. **Delta size**: <15% of full model for typical fine-tuning updates
-2. **Round-trip correctness**: SHA-256 of reconstructed model matches
+1. **Transfer learning delta**: <1% of full model size
+2. **Fine-tuning delta**: <15% of full model size
+3. **Round-trip correctness**: SHA-256 of reconstructed model matches
    original — always, no exceptions
-3. **Backward compat**: agents without delta support still work
-4. **Campaign visibility**: know exactly which devices have which version
-   at any point during a rollout
-5. **Health check flexibility**: any executable, any language, any runtime
+4. **Graceful degradation**: full retrain → ship full file, no worse than today
+5. **Backward compat**: agents without delta support still work
+6. **Campaign visibility**: know which devices have which version at any time
 
-## Open questions
+## Open Questions
 
-1. **Should we support non-ONNX formats?** SafeTensors (just raw tensors,
-   trivial to diff), TFLite (flatbuffer, harder), PyTorch .pt (pickle +
-   tensors, messy). Start with ONNX + generic binary fallback.
+1. **SafeTensors support (high priority).** SafeTensors (Hugging Face) has
+   an even simpler structure than ONNX: 8-byte header length + JSON
+   metadata + flat contiguous tensor data. No protobuf, no graph structure.
+   Tensor boundaries are explicit in the JSON header (offset + length).
+   This makes it trivially diffable. Supporting both ONNX + SafeTensors
+   covers the two dominant edge model formats. Binary fallback covers
+   everything else (TFLite, PyTorch .pt, custom formats).
 
 2. **Should deltas be computed eagerly or lazily?** Eager (on upload) is
    simpler and avoids latency on first download. Lazy saves storage if
-   most version pairs are never requested. Start eager.
+   most version pairs are never requested. Start eager, add lazy eviction
+   later.
 
 3. **Multi-hop deltas?** If a device is on v1 and target is v5, should we
    ship v1→v5 directly, or chain v1→v2→v3→v4→v5? Direct is simpler and
@@ -343,3 +556,9 @@ This lets users:
    0.50012, do we need the exact delta or is "approximately +0.0001"
    good enough? This is lossy and model-quality-sensitive. Defer to a
    future version with user-configurable tolerance.
+
+5. **Should the tensor manifest live in the heartbeat or a separate
+   endpoint?** Heartbeat keeps it simple (one round-trip). But for models
+   with thousands of tensors (large transformers: 200+ tensors), the
+   manifest could be several KB. Probably fine in the heartbeat body for
+   now, consider a separate `POST /manifest` later.

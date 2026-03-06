@@ -1,0 +1,59 @@
+{
+  "edge-1": {
+    "id": "edge-1",
+    "name": "Sensor 1",
+    "status": "online",
+    "platform": {
+      "arch": "aarch64",
+      "os": "macos",
+      "cpu_count": 14,
+      "total_memory_bytes": 0
+    },
+    "current_model": "digit-detect",
+    "current_model_version": "v2.0.0",
+    "assigned_model": "digit-detect",
+    "assigned_model_version": "v2.0.0",
+    "fleet_id": null,
+    "last_heartbeat": "2026-03-06T17:51:28.383220Z",
+    "last_update_result": null,
+    "tags": {}
+  },
+  "edge-3": {
+    "id": "edge-3",
+    "name": "Sensor 3",
+    "status": "online",
+    "platform": {
+      "arch": "aarch64",
+      "os": "macos",
+      "cpu_count": 14,
+      "total_memory_bytes": 0
+    },
+    "current_model": "digit-detect",
+    "current_model_version": "v2.0.0",
+    "assigned_model": "digit-detect",
+    "assigned_model_version": "v2.0.0",
+    "fleet_id": null,
+    "last_heartbeat": "2026-03-06T17:51:29.025771Z",
+    "last_update_result": null,
+    "tags": {}
+  },
+  "edge-2": {
+    "id": "edge-2",
+    "name": "Sensor 2",
+    "status": "online",
+    "platform": {
+      "arch": "aarch64",
+      "os": "macos",
+      "cpu_count": 14,
+      "total_memory_bytes": 0
+    },
+    "current_model": "digit-detect",
+    "current_model_version": "v2.0.0",
+    "assigned_model": "digit-detect",
+    "assigned_model_version": "v2.0.0",
+    "fleet_id": null,
+    "last_heartbeat": "2026-03-06T17:51:28.686765Z",
+    "last_update_result": null,
+    "tags": {}
+  }
+}

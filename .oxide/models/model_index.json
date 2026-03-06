@@ -1,0 +1,18 @@
+{
+  "digit-detect": [
+    {
+      "model_id": "digit-detect",
+      "version": "v1.0.0",
+      "sha256": "4aefc9f2efab7586aa99684409bbbb06d18f193a10fc5c226ef30263b60bd3d5",
+      "size_bytes": 2143752,
+      "uploaded_at": "2026-03-06T17:50:34.007814Z"
+    },
+    {
+      "model_id": "digit-detect",
+      "version": "v2.0.0",
+      "sha256": "8e9f3f87ab1b4e158c1ca1a092a3591c7a8f6c98bac0b3c914a357a2b944eb5e",
+      "size_bytes": 1078,
+      "uploaded_at": "2026-03-06T17:51:07.202870Z"
+    }
+  ]
+}
