@@ -6,6 +6,7 @@ members = [
     "crates/oxide-security",
     "crates/oxide-network",
     "crates/oxide-control",
+    "crates/oxide-delta",
     "crates/oxide-cli",
 ]
 resolver = "2"
@@ -23,6 +24,7 @@ oxide-runtime = { path = "crates/oxide-runtime" }
 oxide-models = { path = "crates/oxide-models" }
 oxide-security = { path = "crates/oxide-security" }
 oxide-network = { path = "crates/oxide-network" }
+oxide-delta = { path = "crates/oxide-delta" }
 oxide-control = { path = "crates/oxide-control" }
 
 # Inference
@@ -75,6 +77,7 @@ bytes = "1"
 
 # Compression
 flate2 = "1"
+zstd = "0.13"
 
 # HTTP client (for agent)
 reqwest = { version = "0.12", features = ["json"] }
