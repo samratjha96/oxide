@@ -8,7 +8,7 @@ oxide run defect-detector.onnx --input image.json --shape "1,3,224,224"
 # ✓ Loaded in 3ms · Inference: 29μs · Output: [0.02, 0.97, 0.01]
 ```
 
-Oxide is an edge AI runtime that replaces your Python deployment scripts, your SSH-into-every-device workflow, and your "it works on my laptop" prayers with a single 4.9 MB binary.
+Oxide is an edge AI runtime that replaces your Python deployment scripts, your SSH-into-every-device workflow, and your "it works on my laptop" prayers with a single 6 MB binary.
 
 Load ONNX models. Run inference in microseconds. Push updates to your entire fleet. Roll back when things go wrong. Encrypt models so competitors can't steal them off your devices. All from one CLI.
 
@@ -16,8 +16,7 @@ Load ONNX models. Run inference in microseconds. Push updates to your entire fle
 
 <p align="center">
   <img alt="License" src="https://img.shields.io/badge/license-MIT%20%2F%20Apache--2.0-blue" />
-  <img alt="Tests" src="https://img.shields.io/badge/tests-112%20passing-brightgreen" />
-  <img alt="Binary" src="https://img.shields.io/badge/binary-4.9%20MB-green" />
+  <img alt="Binary" src="https://img.shields.io/badge/binary-6.0%20MB-green" />
   <img alt="Latency" src="https://img.shields.io/badge/P50-29μs-blueviolet" />
 </p>
 
@@ -39,7 +38,7 @@ If you're running models on devices with 1–8 GB of RAM, intermittent connectiv
 
 ```bash
 git clone https://github.com/oxide-ai/oxide && cd oxide
-cargo build --release          # 4.9 MB binary
+cargo build --release          # 6 MB binary
 
 # See what's inside your model
 ./target/release/oxide info your-model.onnx
@@ -64,7 +63,7 @@ cargo build --release          # 4.9 MB binary
 # ────────────────────────────
 ```
 
-That's a 535,000-parameter MLP. Loading + first inference in under 5 ms. On CPU. No GPU. A 4.9 MB binary.
+That's a 535,000-parameter MLP. Loading + first inference in under 5 ms. On CPU. No GPU. A 6 MB binary.
 
 ---
 
@@ -142,7 +141,7 @@ AES-256-GCM provides both confidentiality and tamper detection. If a single bit 
 
 ### 5. Run a control plane
 
-For larger deployments, `oxide serve` starts an HTTP API that manages devices, fleets, and deployments programmatically.
+For larger deployments, `oxide serve` starts an HTTP API that manages devices, fleets, model storage, and deployments programmatically. Graceful shutdown on SIGTERM/ctrl-c.
 
 ```bash
 oxide serve --port 8080
@@ -152,7 +151,11 @@ curl -X POST localhost:8080/api/v1/devices \
   -H "Content-Type: application/json" \
   -d '{"id": "cam-01", "name": "East Camera"}'
 
-# Deploy to a fleet
+# Upload a model
+curl -X POST localhost:8080/api/v1/models/defect-v7/versions/v7.2.0 \
+  --data-binary @defect-model.onnx
+
+# Deploy to a fleet (assigns model to all fleet devices)
 curl -X POST localhost:8080/api/v1/fleets/factory/deploy \
   -H "Content-Type: application/json" \
   -d '{"model_id": "defect-v7", "model_version": "v7.2.0", "strategy": "canary"}'
@@ -162,26 +165,54 @@ curl -X POST localhost:8080/api/v1/fleets/factory/deploy \
 Full API:
 
 ```
-POST   /api/v1/devices                     Register device
-GET    /api/v1/devices                     List devices
-GET    /api/v1/devices/:id                 Get device
-DELETE /api/v1/devices/:id                 Remove device
-POST   /api/v1/devices/:id/heartbeat       Heartbeat
+POST   /api/v1/devices                           Register device
+GET    /api/v1/devices                           List devices
+GET    /api/v1/devices/:id                       Get device
+DELETE /api/v1/devices/:id                       Remove device
+POST   /api/v1/devices/:id/heartbeat             Heartbeat (device → CP)
 
-POST   /api/v1/fleets                     Create fleet
-GET    /api/v1/fleets/:id                 Get fleet
-POST   /api/v1/fleets/:id/devices/:did     Add device to fleet
-POST   /api/v1/fleets/:id/deploy          Deploy to fleet
-GET    /api/v1/fleets/:id/status          Fleet health summary
-GET    /health                            Control plane health
+POST   /api/v1/fleets                           Create fleet
+GET    /api/v1/fleets/:id                       Get fleet
+POST   /api/v1/fleets/:id/devices/:did           Add device to fleet
+POST   /api/v1/fleets/:id/deploy                Deploy to fleet
+GET    /api/v1/fleets/:id/status                Fleet health summary
+
+POST   /api/v1/models/:id/versions/:ver          Upload model binary
+GET    /api/v1/models/:id/versions/:ver/download  Download model binary
+GET    /api/v1/models/:id/versions/:ver/meta      Model metadata (size, SHA-256)
+GET    /api/v1/models/:id                        List versions
+
+GET    /health                                   Control plane health
 ```
+
+### 6. Run an agent daemon on each device
+
+`oxide agent` is a long-running daemon that polls the control plane for model assignments and applies updates via OTA — no SSH, no manual intervention.
+
+```bash
+oxide agent \
+  --control-plane http://10.0.0.1:8080 \
+  --device-id cam-01 \
+  --poll-interval 30 \
+  --model-dir /opt/oxide/models
+```
+
+The agent:
+- **Polls on a timer** — sends a heartbeat with device state and metrics, gets back any pending model assignment
+- **Full OTA pipeline** — stage → SHA-256 verify → backup current → apply → load model → health check (live inference)
+- **Automatic rollback** — if the health check fails, the previous model is restored
+- **Poison pill protection** — won't retry the same broken model+version more than 3 times
+- **State persistence** — survives restarts; picks up where it left off
+- **Graceful shutdown** — saves state on SIGTERM/ctrl-c
+
+Works through NATs and firewalls (pull-based, outbound HTTP only). Handles intermittent connectivity with exponential backoff.
 
 ---
 
 ## Why not just use...
 
 **Python + Flask on each device?**
-500 MB runtime. 5-second startup. GC pauses during inference. Cross-compiling Python to ARM is its own job. Oxide is a single 4.9 MB static binary with microsecond inference.
+500 MB runtime. 5-second startup. GC pauses during inference. Cross-compiling Python to ARM is its own job. Oxide is a single 6 MB static binary with microsecond inference.
 
 **TensorFlow Lite?**
 Good inference engine. Zero fleet management. Zero OTA. Zero encryption. You still need to build everything around it. Oxide is the deployment layer TF Lite doesn't have.
@@ -200,7 +231,7 @@ Measured on Apple M4 Pro. Release build. LTO enabled, symbols stripped.
 
 | What | Number |
 |------|-------:|
-| Binary size | **4.9 MB** |
+| Binary size | **6.0 MB** |
 | Model load (535K params) | **3.2 ms** |
 | P50 inference (535K params) | **29 μs** |
 | P99 inference (535K params) | **32 μs** |
@@ -212,7 +243,7 @@ All targets met:
 
 | | Goal | Actual |
 |---|---|---:|
-| Binary | < 10 MB | 4.9 MB ✅ |
+| Binary | < 10 MB | 6.0 MB ✅ |
 | Cold start | < 1 s | 3.2 ms ✅ |
 | Inference | < 10 ms | 29 μs ✅ |
 | Memory | < 50 MB | < 8 MB ✅ |
@@ -230,8 +261,8 @@ crates/
 ├── oxide-runtime     Inference engine, model store, health checks
 ├── oxide-security    AES-256-GCM encryption, SHA-256 integrity
 ├── oxide-network     Device REST API (axum), OTA update engine
-├── oxide-control     Device registry, fleet manager, control plane
-└── oxide-cli         The binary you actually run (10 subcommands)
+├── oxide-control     Device registry, fleet manager, model store, control plane
+└── oxide-cli         The binary you actually run (11 subcommands)
 ```
 
 Devices that only need inference can depend on `oxide-runtime` + `oxide-models` alone. The control plane, networking, and security layers are opt-in.
@@ -247,6 +278,26 @@ Devices that only need inference can depend on `oxide-runtime` + `oxide-models` 
 6. CONFIRM   Clean staging — or ROLLBACK backup/ → active/
 ```
 
+### Agent heartbeat loop
+
+```
+Agent                          Control Plane
+  │                                │
+  ├── POST /heartbeat ────────────→│  (device state, metrics)
+  │                                │
+  │←───────── 200 OK ─────────────┤  (assigned model + version, or null)
+  │                                │
+  ├── GET /models/.../download ───→│  (if new assignment)
+  │←───────── model bytes ────────┤
+  │                                │
+  ├── [stage → verify → apply] ──→│
+  ├── [health check: load + infer]│
+  │                                │
+  ├── POST /heartbeat ────────────→│  (report success / failure)
+  │                                │
+  └── sleep(poll_interval) ───────→  repeat
+```
+
 ### Inference pipeline
 
 ```
@@ -259,11 +310,11 @@ tract auto-detects your hardware. On this M4 Pro it enables ARMv8.2 half-precisi
 
 ## Testing
 
-112 tests. Three tiers.
+121 tests. Three tiers.
 
 ```bash
 # Everything
-cargo test --workspace               # 73 unit + 28 integration + 11 stress
+cargo test --workspace               # 82 unit + 28 integration + 11 stress
 
 # Just stress tests (concurrent inference, 100-device fleet, 20 OTA versions)
 cargo test -p oxide-cli --test stress_tests
@@ -332,7 +383,8 @@ cargo build --release --target aarch64-unknown-linux-gnu
 - [x] Model encryption (AES-256-GCM)
 - [x] OTA deploys with atomic rollback
 - [x] Fleet management with canary/rolling rollouts
-- [x] Control plane HTTP API
+- [x] Control plane HTTP API with model store
+- [x] Agent daemon with pull-based OTA updates
 - [x] Benchmarking CLI
 - [ ] mTLS device ↔ control plane
 - [ ] Prometheus metrics endpoint
@@ -346,8 +398,9 @@ cargo build --release --target aarch64-unknown-linux-gnu
 
 ```bash
 cargo build --workspace                       # Debug build
-cargo build --release -p oxide-cli            # Release (4.9 MB)
-cargo test --workspace                        # All 112 tests
+cargo build --release -p oxide-cli            # Release (6 MB)
+cargo test --workspace                        # All 121 tests
+cargo clippy --workspace                      # Zero warnings (all + nursery)
 bash tests/run_all.sh                         # Full E2E
 python3 models/generate_test_models.py        # Regenerate test models
 ```
