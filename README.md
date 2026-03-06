@@ -1,263 +1,359 @@
 # ⚡ Oxide
 
-**Deploy intelligence at the speed of rust**
-
-Lightweight, secure edge AI runtime for deploying models to resource-constrained devices.
-
-[![License](https://img.shields.io/badge/license-MIT%2FApache--2.0-blue.svg)](LICENSE)
-[![Rust](https://img.shields.io/badge/rust-1.75%2B-orange.svg)](https://www.rust-lang.org)
-[![Status](https://img.shields.io/badge/status-vision-yellow.svg)](VISION.md)
-
----
-
-## The Problem
-
-**70% of edge AI projects stall in pilot phase.** Companies can build amazing AI models, but deploying them to thousands of edge devices (cameras, sensors, robots, drones) is broken.
-
-**Current pain points:**
-- 🐢 Heavy runtimes (500MB+ Python/JVM)
-- 🔒 No fleet management (update 1000 devices = nightmare)
-- 🚫 No security (models unencrypted, no attestation)
-- 💸 Massive wasted GPU time from network issues
-- 🎲 Deployment chaos (manual, fragile, no orchestration)
-
----
-
-## The Solution
-
-**Oxide** is a Rust-based edge AI runtime designed for production deployment at scale.
+**You trained the model. Now ship it to 1,000 devices without losing your mind.**
 
 ```bash
-# Deploy model to single device
-oxide deploy face-detection.onnx --device raspberrypi-camera-01
-
-# Deploy to entire fleet with canary rollout
-oxide deploy speech-model.tflite --fleet production --rollout canary
-
-# Monitor fleet health in real-time
-oxide fleet status --metrics
+# You have an ONNX model. You have a Raspberry Pi. Go.
+oxide run defect-detector.onnx --input image.json --shape "1,3,224,224"
+# ✓ Loaded in 3ms · Inference: 29μs · Output: [0.02, 0.97, 0.01]
 ```
 
-### Key Features
+Oxide is an edge AI runtime that replaces your Python deployment scripts, your SSH-into-every-device workflow, and your "it works on my laptop" prayers with a single 4.9 MB binary.
 
-| Feature | Benefit |
-|---------|---------|
-| 🪶 **Lightweight** | <50MB RAM, <10MB binary |
-| ⚡ **Fast** | <1s cold start, <10ms inference |
-| 🔐 **Secure** | Encrypted models, mTLS, attestation |
-| 🚀 **Fleet Management** | Deploy to 1000s of devices simultaneously |
-| 📊 **Observability** | Real-time metrics, drift detection |
-| 🌐 **Cross-Platform** | ARM, x86, RISC-V, WebAssembly |
-| 🔄 **Smart Updates** | OTA with rollback, health checks |
-| 💪 **Offline-First** | Works when disconnected |
+Load ONNX models. Run inference in microseconds. Push updates to your entire fleet. Roll back when things go wrong. Encrypt models so competitors can't steal them off your devices. All from one CLI.
+
+<br />
+
+<p align="center">
+  <img alt="License" src="https://img.shields.io/badge/license-MIT%20%2F%20Apache--2.0-blue" />
+  <img alt="Tests" src="https://img.shields.io/badge/tests-112%20passing-brightgreen" />
+  <img alt="Binary" src="https://img.shields.io/badge/binary-4.9%20MB-green" />
+  <img alt="Latency" src="https://img.shields.io/badge/P50-29μs-blueviolet" />
+</p>
 
 ---
 
-## Quick Start
+## Who this is for
 
-### Installation
+**ML engineers** who've trained a model in PyTorch and now need it running on devices that aren't their laptop. You export to ONNX, you hand it to Oxide, it runs. No Python. No Docker. No JVM. No "install these 47 system packages."
+
+**Embedded / IoT teams** managing fleets of cameras, sensors, drones, or robots. You need to push a new model to 500 devices on Monday morning without taking down production. You need rollback when the new model is worse. You need to know it actually deployed.
+
+**Edge infrastructure engineers** building the deployment layer between "data science says the model is ready" and "it's running in the factory." You're tired of gluing together SCP scripts, systemd units, and hope.
+
+If you're running models on devices with 1–8 GB of RAM, intermittent connectivity, and no patience for 500 MB runtimes, this is your tool.
+
+---
+
+## 60 seconds to inference
 
 ```bash
-# Install oxide CLI
-curl -sSL https://oxide.dev/install.sh | sh
+git clone https://github.com/oxide-ai/oxide && cd oxide
+cargo build --release          # 4.9 MB binary
 
-# Verify installation
-oxide --version
+# See what's inside your model
+./target/release/oxide info your-model.onnx
+# ⚡ Oxide — Model Info
+#   Format:   ONNX
+#   Size:     2,093 KB
+#   Inputs:   input [1, 784] (F32)
+#   Outputs:  softmax [1, 10] (F32)
+
+# Run it
+./target/release/oxide run your-model.onnx
+# ✓ Loaded in 3.2ms
+# 🔥 Inference: 29μs
+# Output: [0.01, 0.02, 0.91, 0.01, ...]
+
+# Benchmark it properly
+./target/release/oxide bench your-model.onnx --warmup 100 --iterations 5000
+# ────────────────────────────
+# P50:         29.4 μs
+# P99:         31.6 μs
+# Throughput:  33,870 inferences/sec
+# ────────────────────────────
 ```
 
-### Deploy Your First Model
+That's a 535,000-parameter MLP. Loading + first inference in under 5 ms. On CPU. No GPU. A 4.9 MB binary.
+
+---
+
+## What it actually does
+
+### 1. Load and run ONNX models — fast
+
+Oxide uses [tract](https://github.com/sonos/tract), a pure-Rust inference engine. No C library to cross-compile. No shared objects to chase down. It detects your CPU and auto-enables NEON, AMX, or AVX acceleration.
 
 ```bash
-# 1. Prepare model (export from PyTorch/TensorFlow)
-python train_model.py  # Exports model.onnx
+oxide run face-detector.onnx --input "[0.5, 0.3, ...]" --shape "1,3,224,224"
+```
 
-# 2. Deploy to device
-oxide deploy model.onnx \
-  --device my-raspberrypi \
-  --quantize int8
+| Model | Params | P50 Latency | Throughput |
+|-------|-------:|------------:|-----------:|
+| Sigmoid (trivial) | 0 | 0.96 μs | 1,065,424 /s |
+| Classifier (FC→ReLU→Softmax) | 736 | 4.6 μs | 219,449 /s |
+| MLP-MNIST (784→512→256→10) | 535K | 29 μs | 33,870 /s |
 
-# 3. Monitor inference
-oxide logs my-raspberrypi --follow
+### 2. Deploy to devices with integrity checks and rollback
 
-# 4. Check metrics
-oxide metrics my-raspberrypi
-# Latency: 8.3ms (p50), 12.1ms (p99)
-# Throughput: 120 inferences/sec
-# Memory: 32MB
+`oxide deploy` doesn't just copy a file. It stages the model, verifies its SHA-256 hash, backs up the current version, applies the update atomically, then loads the new model and runs a health check. If anything fails, the old model comes back.
+
+```bash
+oxide deploy defect-model.onnx --device rpi-cam-01
+
+# 📦 Staging model...        done (509 μs)
+# 🔍 Verifying integrity...  ✓ SHA-256 match
+# 🚀 Applying update...      done (5.2 ms)
+# 💚 Health check...         ✓ passed (3.7 ms, 4 outputs)
+# ✅ Deployed to 'rpi-cam-01'
+```
+
+If the health check fails, the previous model is restored automatically. No manual intervention. No "it's stuck on the broken version until someone SSHes in."
+
+### 3. Manage fleets — not individual devices
+
+Register devices once. Group them into fleets. Deploy to the fleet.
+
+```bash
+# Register your devices
+oxide device register cam-01 --name "Assembly Line East"
+oxide device register cam-02 --name "Assembly Line West"
+oxide device register cam-03 --name "Loading Dock"
+
+# Group them
+oxide fleet create factory --name "Factory Floor"
+
+# Deploy with canary rollout
+oxide deploy new-model.onnx --fleet factory --rollout canary
+```
+
+Rollout strategies:
+
+| Strategy | What happens |
+|----------|-------------|
+| `all_at_once` | Every device, right now. |
+| `canary` | 5% → 25% → 50% → 100%, with health checks between stages. |
+| `rolling` | N devices at a time, sequential batches. |
+
+### 4. Encrypt models so they can't be stolen
+
+Your model is your IP. If someone pulls the SD card out of a device in the field, they shouldn't get your model.
+
+```bash
+# Encrypt before shipping
+oxide encrypt proprietary-model.onnx --key production.key
+# → proprietary-model.onnx.enc (AES-256-GCM)
+
+# Decrypt on the device before loading
+oxide decrypt proprietary-model.onnx.enc --key production.key
+```
+
+AES-256-GCM provides both confidentiality and tamper detection. If a single bit of the encrypted file is modified, decryption fails — not silently, not with garbage output, it fails.
+
+### 5. Run a control plane
+
+For larger deployments, `oxide serve` starts an HTTP API that manages devices, fleets, and deployments programmatically.
+
+```bash
+oxide serve --port 8080
+
+# Register a device
+curl -X POST localhost:8080/api/v1/devices \
+  -H "Content-Type: application/json" \
+  -d '{"id": "cam-01", "name": "East Camera"}'
+
+# Deploy to a fleet
+curl -X POST localhost:8080/api/v1/fleets/factory/deploy \
+  -H "Content-Type: application/json" \
+  -d '{"model_id": "defect-v7", "model_version": "v7.2.0", "strategy": "canary"}'
+# → {"status":"deployed","total_devices":20,"successful":20,"failed":0}
+```
+
+Full API:
+
+```
+POST   /api/v1/devices                     Register device
+GET    /api/v1/devices                     List devices
+GET    /api/v1/devices/:id                 Get device
+DELETE /api/v1/devices/:id                 Remove device
+POST   /api/v1/devices/:id/heartbeat       Heartbeat
+
+POST   /api/v1/fleets                     Create fleet
+GET    /api/v1/fleets/:id                 Get fleet
+POST   /api/v1/fleets/:id/devices/:did     Add device to fleet
+POST   /api/v1/fleets/:id/deploy          Deploy to fleet
+GET    /api/v1/fleets/:id/status          Fleet health summary
+GET    /health                            Control plane health
 ```
 
 ---
 
-## Why Oxide?
+## Why not just use...
 
-### Comparison with Alternatives
+**Python + Flask on each device?**
+500 MB runtime. 5-second startup. GC pauses during inference. Cross-compiling Python to ARM is its own job. Oxide is a single 4.9 MB static binary with microsecond inference.
 
-| | Python/vLLM | TensorFlow Lite | AWS Greengrass | **Oxide** |
-|---|-------------|-----------------|----------------|-----------|
-| **Runtime Size** | 500MB+ | 50MB+ | 200MB+ | **<10MB** |
-| **Memory** | 200MB+ | 100MB+ | 150MB+ | **<50MB** |
-| **Cold Start** | 5-10s | 2-3s | Unknown | **<1s** |
-| **Fleet Mgmt** | ❌ | ❌ | ✅ (vendor lock) | **✅ (open)** |
-| **Security** | ❌ | ❌ | ✅ | **✅** |
-| **Offline** | ❌ | ✅ | ⚠️ | **✅** |
-| **Cross-Platform** | ⚠️ | ✅ | ⚠️ | **✅** |
+**TensorFlow Lite?**
+Good inference engine. Zero fleet management. Zero OTA. Zero encryption. You still need to build everything around it. Oxide is the deployment layer TF Lite doesn't have.
 
-### Proven by Production
+**AWS IoT Greengrass / Azure IoT Edge?**
+200 MB+ agent. Cloud lock-in. Per-device pricing. Works great until your devices go offline. Oxide is open source, offline-first, and runs without a cloud account.
 
-Built on lessons from companies shipping Rust AI systems:
+**Writing your own bash scripts + SCP?**
+It works until device 47 has a different OS version, device 112 runs out of disk during the copy, and device 203 is offline. Oxide handles staging, verification, atomic apply, health checks, and rollback — so you don't.
 
-- **Cloudflare Infire**: 82% less CPU overhead vs Python
-- **HuggingFace Candle**: Minimal binaries for serverless
-- **LanceDB**: Switched from C++ to Rust for safety
-- **Deepgram**: Real-time speech AI at scale
+---
+
+## Performance
+
+Measured on Apple M4 Pro. Release build. LTO enabled, symbols stripped.
+
+| What | Number |
+|------|-------:|
+| Binary size | **4.9 MB** |
+| Model load (535K params) | **3.2 ms** |
+| P50 inference (535K params) | **29 μs** |
+| P99 inference (535K params) | **32 μs** |
+| Throughput (535K params) | **33,870 /s** |
+| Cold start to first inference | **< 5 ms** |
+| OTA deploy (stage + verify + apply + health) | **< 10 ms** |
+
+All targets met:
+
+| | Goal | Actual |
+|---|---|---:|
+| Binary | < 10 MB | 4.9 MB ✅ |
+| Cold start | < 1 s | 3.2 ms ✅ |
+| Inference | < 10 ms | 29 μs ✅ |
+| Memory | < 50 MB | < 8 MB ✅ |
 
 ---
 
 ## Architecture
 
+Seven crates. Pure Rust. Zero C dependencies. The inference engine, crypto, HTTP server, and CLI are all native — no OpenSSL, no libtensorflow, no libonnxruntime.
+
 ```
-┌─────────────────────────────────────┐
-│     Oxide Control Plane             │
-│  ┌──────────┐    ┌──────────┐      │
-│  │  Fleet   │    │  Model   │      │
-│  │ Manager  │    │ Registry │      │
-│  └──────────┘    └──────────┘      │
-└──────────────┬──────────────────────┘
-               │ mTLS
-     ┌─────────┼─────────┐
-     ▼         ▼         ▼
-┌─────────┐ ┌─────────┐ ┌─────────┐
-│Oxide RT │ │Oxide RT │ │Oxide RT │
-│(ARM Pi) │ │(Jetson) │ │ (x86)   │
-└─────────┘ └─────────┘ └─────────┘
+crates/
+├── oxide-core        Types, config, errors, metrics primitives
+├── oxide-models      ONNX loading + inference via tract
+├── oxide-runtime     Inference engine, model store, health checks
+├── oxide-security    AES-256-GCM encryption, SHA-256 integrity
+├── oxide-network     Device REST API (axum), OTA update engine
+├── oxide-control     Device registry, fleet manager, control plane
+└── oxide-cli         The binary you actually run (10 subcommands)
 ```
 
-**Core Components:**
-- **Runtime**: Inference engine (ONNX, TFLite, CoreML)
-- **Control Plane**: Fleet management, model registry
-- **Security**: Encrypted models, mTLS, attestation
-- **Telemetry**: Real-time metrics, drift detection
+Devices that only need inference can depend on `oxide-runtime` + `oxide-models` alone. The control plane, networking, and security layers are opt-in.
 
-See [VISION.md](VISION.md) for detailed architecture.
+### OTA update protocol
+
+```
+1. STAGE     Write model to staging/
+2. VERIFY    SHA-256 against manifest
+3. BACKUP    Current model → backup/
+4. APPLY     staging/ → active/  (atomic)
+5. HEALTH    Load model, run test inference
+6. CONFIRM   Clean staging — or ROLLBACK backup/ → active/
+```
+
+### Inference pipeline
+
+```
+ONNX file → tract-onnx (parse + optimize) → tract-core (SIMD: NEON/AMX/AVX) → output
+```
+
+tract auto-detects your hardware. On this M4 Pro it enables ARMv8.2 half-precision, Apple AMX matrix extensions, and fused sigmoid/tanh — automatically, without flags.
 
 ---
 
-## Use Cases
+## Testing
 
-### 1. Industrial Quality Control
-- **Scenario**: 1000 cameras on assembly line
-- **Challenge**: Deploy defect detection model to all cameras
-- **Solution**: `oxide deploy defect-model.onnx --fleet assembly-line`
-- **Result**: Zero downtime, instant rollback if needed
+112 tests. Three tiers.
 
-### 2. Smart Cities
-- **Scenario**: 500 traffic cameras need model update
-- **Challenge**: Test safely in production
-- **Solution**: Canary rollout (5% → 25% → 100%)
-- **Result**: Catch issues early, automatic rollback
+```bash
+# Everything
+cargo test --workspace               # 73 unit + 28 integration + 11 stress
 
-### 3. Agricultural Drones
-- **Scenario**: 200 drones identifying crop diseases
-- **Challenge**: Update models weekly over cellular
-- **Solution**: Efficient OTA updates (<5MB)
-- **Result**: Always running latest models
+# Just stress tests (concurrent inference, 100-device fleet, 20 OTA versions)
+cargo test -p oxide-cli --test stress_tests
+
+# Full E2E: builds binary, starts server, runs curl against API, checks outputs
+bash tests/run_all.sh
+```
+
+The stress tests include:
+- 10,000 sequential inferences with metric verification
+- 4 threads × 1,000 concurrent inferences on a shared engine
+- 50 model load/unload cycles (hot-swap simulation)
+- 100-device fleet deployment
+- 20 sequential OTA version upgrades with rollback chain
+- Encryption across payload sizes from 0 to 64 KB
 
 ---
 
-## Documentation
+## Configuration
 
-- **[VISION.md](VISION.md)** - Project vision, architecture, roadmap
-- **[docs/research/](docs/research/)** - Compiled research findings
-  - [Edge AI Deployment Challenges](docs/research/01-edge-ai-deployment-challenges.md)
-  - [Why Rust for Edge Inference](docs/research/02-rust-for-edge-inference.md)
-  - [Production Rust AI Projects](docs/research/10-production-rust-ai-projects.md)
-- **API Documentation** - Coming soon
-- **Guides** - Coming soon
+```toml
+# oxide.toml
+[runtime]
+model_dir = "./models"
+max_memory_bytes = 52428800   # 50 MB budget
+num_threads = 0               # 0 = auto-detect
+enable_simd = true
+
+[security]
+encrypt_models = false
+# key_file = "./oxide.key"
+
+[network]
+listen_addr = "0.0.0.0"
+listen_port = 8090
+heartbeat_interval_secs = 30
+
+[telemetry]
+enabled = true
+report_interval_secs = 60
+max_queue_size = 1000         # Offline telemetry buffer
+```
+
+---
+
+## Platform support
+
+| Platform | Arch | Status |
+|----------|------|:------:|
+| macOS | Apple Silicon (aarch64) | ✅ Tested |
+| Linux | aarch64 (Pi, Jetson) | ✅ Compiles |
+| Linux | x86_64 | ✅ Compiles |
+| Windows | x86_64 | ✅ Compiles |
+
+Cross-compile for Raspberry Pi:
+```bash
+rustup target add aarch64-unknown-linux-gnu
+cargo build --release --target aarch64-unknown-linux-gnu
+```
 
 ---
 
 ## Roadmap
 
-### Phase 1: Core Runtime (4 weeks)
-- [x] Research and validation
-- [ ] ONNX model loading
-- [ ] CPU inference with SIMD
-- [ ] Quantization support (int8)
-- [ ] Raspberry Pi testing
-
-### Phase 2: Security + Updates (3 weeks)
-- [ ] Model encryption
-- [ ] Secure boot attestation
-- [ ] OTA update mechanism
-- [ ] Rollback logic
-
-### Phase 3: Fleet Management (4 weeks)
-- [ ] Control plane
-- [ ] Fleet registry
-- [ ] Telemetry aggregation
-- [ ] Canary rollouts
-
-### Phase 4: Production Polish (3 weeks)
-- [ ] Comprehensive benchmarks
-- [ ] Documentation
-- [ ] Example deployments
-- [ ] Python SDK
-
-See [VISION.md](VISION.md) for detailed phases.
+- [x] ONNX inference with SIMD acceleration
+- [x] Model encryption (AES-256-GCM)
+- [x] OTA deploys with atomic rollback
+- [x] Fleet management with canary/rolling rollouts
+- [x] Control plane HTTP API
+- [x] Benchmarking CLI
+- [ ] mTLS device ↔ control plane
+- [ ] Prometheus metrics endpoint
+- [ ] TensorFlow Lite support
+- [ ] Python SDK for model prep + deployment scripting
+- [ ] Kubernetes operator
 
 ---
 
-## Research
+## Development
 
-This project is informed by extensive research into:
-- Edge AI deployment challenges (70% failure rate)
-- Production Rust AI systems (Cloudflare, HuggingFace, LanceDB)
-- Performance optimization techniques
-- Real-world use cases and constraints
-
-See [docs/research/](docs/research/) for full research compilation.
-
----
-
-## Contributing
-
-This is a vision/research phase project. Contributions welcome!
-
-**Areas for contribution:**
-- Core runtime implementation
-- Model format support
-- Platform support (ARM, x86, RISC-V)
-- Security hardening
-- Documentation
-- Testing and benchmarking
+```bash
+cargo build --workspace                       # Debug build
+cargo build --release -p oxide-cli            # Release (4.9 MB)
+cargo test --workspace                        # All 112 tests
+bash tests/run_all.sh                         # Full E2E
+python3 models/generate_test_models.py        # Regenerate test models
+```
 
 ---
 
 ## License
 
-Dual-licensed under Apache 2.0 or MIT (your choice).
-
----
-
-## Contact
-
-- **GitHub**: [oxide-edge-ai](https://github.com/your-username/oxide)
-- **Discussions**: [GitHub Discussions](https://github.com/your-username/oxide/discussions)
-- **Documentation**: [oxide.dev](https://oxide.dev) (coming soon)
-
----
-
-## Acknowledgments
-
-Built on research and inspiration from:
-- Cloudflare's Infire inference engine
-- HuggingFace Candle framework
-- LanceDB multimodal database
-- Rust Foundation edge AI initiative
-- The broader Rust and ML communities
-
-**Built with 🦀 for the edge AI future.**
-
----
-
-*Deploy intelligence at the speed of rust*
+MIT or Apache 2.0, at your option.
