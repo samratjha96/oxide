@@ -6,6 +6,5 @@ pub mod device;
 pub mod encrypt;
 pub mod fleet;
 pub mod info;
-pub mod metrics;
 pub mod run;
 pub mod serve;

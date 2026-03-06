@@ -60,12 +60,6 @@ pub enum OxideError {
     #[error("JSON error: {0}")]
     Json(#[from] serde_json::Error),
 
-    #[error("TOML deserialization error: {0}")]
-    Toml(#[from] toml::de::Error),
-
-    #[error("TOML serialization error: {0}")]
-    TomlSer(#[from] toml::ser::Error),
-
     #[error("Timeout: {0}")]
     Timeout(String),
 

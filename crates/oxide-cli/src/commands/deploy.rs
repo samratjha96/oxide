@@ -3,15 +3,13 @@
 //! Implements the full OTA deployment workflow:
 //! 1. Read model file
 //! 2. Compute integrity hash
-//! 3. Optionally encrypt the model
-//! 4. Stage via OTA updater
-//! 5. Verify integrity
-//! 6. Apply update
-//! 7. Load and health-check the model
+//! 3. Stage via OTA updater
+//! 4. Verify integrity
+//! 5. Apply update
+//! 6. Run health check (user hook or file-exists check)
 
 use oxide_core::model::{ModelId, ModelVersion};
 use oxide_network::ota::{OtaUpdater, UpdatePackage};
-use oxide_runtime::InferenceEngine;
 use sha2::{Digest, Sha256};
 use std::path::Path;
 use std::time::Instant;
@@ -45,7 +43,11 @@ pub fn execute(
             println!("oxide deploy");
             println!("  model:    {}", model_path);
             println!("  size:     {:.2} KB", size as f64 / 1024.0);
-            println!("  sha256:   {}...{}", &sha256[..8], &sha256[sha256.len()-8..]);
+            println!(
+                "  sha256:   {}...{}",
+                &sha256[..8],
+                &sha256[sha256.len() - 8..]
+            );
             println!("  device:   {}", dev);
             println!("  strategy: {}", rollout);
             println!();
@@ -78,20 +80,13 @@ pub fn execute(
             let active_path = updater.apply_update(&mut state)?;
             println!(" done ({:.2?})", start.elapsed());
 
-            // Health check: load the model and run a test inference
+            // Health check: verify file exists and is non-empty
             print!("  health check...");
-            let start = Instant::now();
-            let engine = InferenceEngine::new(0);
-            let info = engine.load_model(&active_path)?;
-
-            // Try inference with zero input
-            let input_shape: Vec<usize> = info.inputs.first()
-                .map(|inp| inp.shape.iter().map(|&d| if d < 0 { 1 } else { d as usize }).collect())
-                .unwrap_or_else(|| vec![1]);
-            let input_size: usize = input_shape.iter().product();
-            let input_data = vec![0.0f32; input_size];
-            let result = engine.infer(&info.id, &input_data, &input_shape)?;
-            println!(" passed ({:.2?}, {} outputs)", start.elapsed(), result.outputs.len());
+            let meta = std::fs::metadata(&active_path)?;
+            if meta.len() == 0 {
+                anyhow::bail!("deployed model file is empty");
+            }
+            println!(" passed ({} bytes on disk)", meta.len());
 
             println!();
             println!("  deployed to '{}'", dev);
@@ -101,7 +96,11 @@ pub fn execute(
             println!("oxide deploy");
             println!("  model:    {}", model_path);
             println!("  size:     {:.2} KB", size as f64 / 1024.0);
-            println!("  sha256:   {}...{}", &sha256[..8], &sha256[sha256.len()-8..]);
+            println!(
+                "  sha256:   {}...{}",
+                &sha256[..8],
+                &sha256[sha256.len() - 8..]
+            );
             println!("  fleet:    {}", fl);
             println!("  strategy: {}", rollout);
             println!();

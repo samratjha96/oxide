@@ -142,12 +142,6 @@ enum Commands {
         health_check: Option<String>,
     },
 
-    /// Show metrics for a running model
-    Metrics {
-        /// Model name
-        model: Option<String>,
-    },
-
     /// Run benchmarks on a model
     Bench {
         /// Path to the model file
@@ -278,8 +272,6 @@ async fn main() -> anyhow::Result<()> {
             )
             .await?
         }
-
-        Commands::Metrics { model } => commands::metrics::execute(model.as_deref())?,
 
         Commands::Bench {
             model,

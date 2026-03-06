@@ -5,15 +5,12 @@
 
 #![deny(unsafe_code)]
 
-pub mod config;
 pub mod device;
 pub mod error;
 pub mod fleet;
 pub mod metrics;
 pub mod model;
-pub mod telemetry;
 
-pub use config::OxideConfig;
 pub use device::{BasicMetrics, Device, DeviceId, DeviceStatus, HeartbeatRequest, HeartbeatResponse, UpdateResult};
 pub use error::{OxideError, Result};
 pub use fleet::{Fleet, FleetId, RolloutStrategy};

@@ -8,7 +8,6 @@ description = "Core traits, types, and configuration for the Oxide edge AI runti
 [dependencies]
 serde = { workspace = true }
 serde_json = { workspace = true }
-toml = { workspace = true }
 thiserror = { workspace = true }
 chrono = { workspace = true }
 uuid = { workspace = true }
