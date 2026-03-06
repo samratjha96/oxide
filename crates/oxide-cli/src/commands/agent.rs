@@ -145,6 +145,15 @@ pub async fn execute(
 
         match (&assigned_model, &assigned_version) {
             (Some(m), Some(v)) => {
+                // Reject identifiers with shell metacharacters or path traversal
+                if !is_safe_identifier(m) || !is_safe_identifier(v) {
+                    println!(
+                        "  [{}] ✗ rejecting unsafe model/version identifier: {}@{}",
+                        now, m, v
+                    );
+                    continue;
+                }
+
                 let is_current = agent_state.current_model.as_deref() == Some(m.as_str())
                     && agent_state.current_model_version.as_deref() == Some(v.as_str());
 
@@ -250,7 +259,7 @@ pub async fn execute(
                             data
                         }
                         Err(e) => {
-                            println!("  [{}] ✗ delta failed: {}", now, e);
+                            println!("  [{}] ✗ model download failed: {}", now, e);
                             continue;
                         }
                     }
@@ -406,6 +415,16 @@ fn sha256_hex(data: &[u8]) -> String {
     let mut hasher = Sha256::new();
     hasher.update(data);
     format!("{:x}", hasher.finalize())
+}
+
+/// Reject identifiers that could be dangerous in shell contexts or file paths.
+/// Allows alphanumeric, hyphens, underscores, dots, and plus signs.
+fn is_safe_identifier(s: &str) -> bool {
+    !s.is_empty()
+        && s.len() <= 256
+        && s.bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_' || b == b'.' || b == b'+')
+        && !s.contains("..")
 }
 
 fn load_state(path: &Path) -> AgentState {

@@ -111,6 +111,9 @@ impl DeviceRegistry {
     }
 
     /// Record a heartbeat from a device.
+    ///
+    /// Persists to disk to avoid losing heartbeat timestamps on restart.
+    /// At high heartbeat rates, consider batching or moving to SQLite.
     pub fn heartbeat(&self, id: &DeviceId) -> Result<()> {
         let mut devices = self.devices.write().map_err(|e| {
             OxideError::Internal(format!("Lock poisoned: {}", e))
@@ -123,6 +126,8 @@ impl DeviceRegistry {
         device.last_heartbeat = Some(chrono::Utc::now());
         device.status = DeviceStatus::Online;
 
+        drop(devices);
+        self.persist()?;
         Ok(())
     }
 

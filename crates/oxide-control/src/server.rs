@@ -190,28 +190,43 @@ impl ControlPlaneServer {
                 )
                 .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 
-            // Update campaign progress based on device state
-            let mut campaigns = state.campaigns.write().await;
-            if let Some(campaign) = campaigns.active_for_device_mut(&device_id) {
-                let target = &campaign.target_version;
-                if req.current_model_version.as_ref() == Some(target) {
-                    // Device is on the target version — mark complete
-                    campaign.update_device(
-                        &device_id,
-                        crate::campaign::DeviceUpdateState::Complete {
-                            completed_at: chrono::Utc::now().to_rfc3339(),
-                            bytes_downloaded: 0, // TODO: track from download endpoint
-                        },
-                    );
-                } else if let Some(UpdateResult::Failed { ref error }) = req.last_update_result {
-                    // Device reported failure
-                    campaign.update_device(
-                        &device_id,
-                        crate::campaign::DeviceUpdateState::Failed {
-                            error: error.clone(),
-                            attempts: 1,
-                        },
-                    );
+            // Determine campaign update outside the write lock
+            let campaign_update = {
+                let campaigns = state.campaigns.read().await;
+                if let Some(campaign) = campaigns.active_for_device(&device_id) {
+                    let target = campaign.target_version.clone();
+                    let campaign_id = campaign.id.clone();
+                    if req.current_model_version.as_ref() == Some(&target) {
+                        Some((
+                            campaign_id,
+                            crate::campaign::DeviceUpdateState::Complete {
+                                completed_at: chrono::Utc::now().to_rfc3339(),
+                                bytes_downloaded: 0,
+                            },
+                        ))
+                    } else if let Some(UpdateResult::Failed { ref error }) =
+                        req.last_update_result
+                    {
+                        Some((
+                            campaign_id,
+                            crate::campaign::DeviceUpdateState::Failed {
+                                error: error.clone(),
+                                attempts: 1,
+                            },
+                        ))
+                    } else {
+                        None
+                    }
+                } else {
+                    None
+                }
+            }; // read lock dropped here
+
+            // Apply campaign update with a brief write lock
+            if let Some((campaign_id, new_state)) = campaign_update {
+                let mut campaigns = state.campaigns.write().await;
+                if let Some(campaign) = campaigns.get_mut(&campaign_id) {
+                    campaign.update_device(&device_id, new_state);
                 }
             }
         }
