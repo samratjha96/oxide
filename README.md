@@ -289,21 +289,21 @@ Devices that only need inference can depend on `oxide-runtime` + `oxide-models` 
 ### Agent heartbeat loop
 
 ```
-Agent                          Control Plane
-  │                                │
-  ├── POST /heartbeat ────────────→│  (device state, metrics)
-  │                                │
-  │←───────── 200 OK ─────────────┤  (assigned model + version, or null)
-  │                                │
-  ├── GET /models/.../download ───→│  (if new assignment)
-  │←───────── model bytes ────────┤
-  │                                │
-  ├── [stage → verify → apply] ──→│
-  ├── [health check: load + infer]│
-  │                                │
-  ├── POST /heartbeat ────────────→│  (report success / failure)
-  │                                │
-  └── sleep(poll_interval) ───────→  repeat
+Agent                                    Control Plane
+  │                                            │
+  ├─── POST /heartbeat ──────────────────────→ │  (device state, metrics)
+  │                                            │
+  │ ←──────────── 200 OK ──────────────────── ┤  (assigned model + version, or null)
+  │                                            │
+  ├─── GET /models/.../download ─────────────→ │  (if new assignment)
+  │ ←──────────── model bytes ──────────────── ┤
+  │                                            │
+  ├─── [stage → verify → apply] ───→           │
+  ├─── [health check: load + infer]            │
+  │                                            │
+  ├─── POST /heartbeat ──────────────────────→ │  (report success / failure)
+  │                                            │
+  └─── sleep(poll_interval) ──────────────────→   repeat
 ```
 
 ### Inference pipeline
@@ -318,26 +318,21 @@ tract auto-detects your hardware. On this M4 Pro it enables ARMv8.2 half-precisi
 
 ## Testing
 
-121 tests. Three tiers.
-
 ```bash
-# Everything
-cargo test --workspace               # 82 unit + 28 integration + 11 stress
+# All tests (unit + integration + stress)
+cargo test --workspace
 
-# Just stress tests (concurrent inference, 100-device fleet, 20 OTA versions)
+# Stress tests only (concurrent inference, large fleets, OTA chains)
 cargo test -p oxide-cli --test stress_tests
 
-# Full E2E: builds binary, starts server, runs curl against API, checks outputs
+# Full E2E: starts server, exercises API with curl, verifies outputs
 bash tests/run_all.sh
+
+# Interactive fleet OTA demo (tmux)
+./scripts/demo.sh
 ```
 
-The stress tests include:
-- 10,000 sequential inferences with metric verification
-- 4 threads × 1,000 concurrent inferences on a shared engine
-- 50 model load/unload cycles (hot-swap simulation)
-- 100-device fleet deployment
-- 20 sequential OTA version upgrades with rollback chain
-- Encryption across payload sizes from 0 to 64 KB
+Stress tests cover: high-throughput sequential and concurrent inference, 50× model hot-swap cycles, 100-device fleet deployment, 20 sequential OTA version upgrades with rollback chain, and encryption across payload sizes from 0 to 64 KB.
 
 ---
 
