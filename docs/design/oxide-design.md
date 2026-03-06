@@ -297,7 +297,7 @@ Dependencies: `prost` (ONNX protobuf), `zstd`, `sha2`.
 
 - [ ] Remove inference engine from agent
 - [ ] Agent = delivery + lifecycle only
-- [ ] Update README, demo, docs
+- [x] Update README
 
 ### Phase 5: Harden (separate)
 
