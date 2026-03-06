@@ -213,7 +213,7 @@ crates/
 ├── oxide-security    AES-256-GCM encryption, SHA-256 integrity
 ├── oxide-network     Device REST API, OTA update engine
 ├── oxide-control     Registry, fleet manager, model store, campaigns, server
-└── oxide-cli         The binary (12 subcommands)
+└── oxide-cli         The binary (11 subcommands)
 ```
 
 ---

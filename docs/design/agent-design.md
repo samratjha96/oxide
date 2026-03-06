@@ -1,9 +1,15 @@
 # Oxide Agent: Device-Side Daemon — Design Document
 
-**Status:** Approved for Internal Beta  
+**Status:** Implemented (see `crates/oxide-cli/src/commands/agent.rs`)  
 **Authors:** Oxide Contributors  
 **Last Updated:** 2026-03-06  
 **Target:** v0.2.0
+
+> **Note:** This was the design document written before implementation.
+> Key changes since: health checks now use `--health-check` command hooks
+> (not `InferenceEngine`), the agent supports delta downloads via OXDL,
+> and campaigns replace fire-and-forget deploy. See `docs/design/oxide-design.md`
+> for the current task checklist.
 
 ---
 
