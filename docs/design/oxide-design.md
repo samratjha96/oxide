@@ -266,30 +266,30 @@ The core differentiator. Pure Rust crate, no network, no server.
 
 Dependencies: `prost` (ONNX protobuf), `zstd`, `sha2`.
 
-- [ ] ONNX parser: extract tensor names, offsets, sizes, raw bytes
-- [ ] SafeTensors parser: JSON header + flat tensor extraction
-- [ ] Tensor manifest: per-tensor SHA-256 hashes
-- [ ] Strategy A: tensor-level XOR delta
-- [ ] Strategy B: binary delta (zstd dictionary)
-- [ ] OXDL patch format: write and read
-- [ ] `compute_delta(base, target) -> Patch` — both strategies, pick smaller
-- [ ] `apply_delta(base, patch) -> target` — reconstruct + SHA-256 verify
-- [ ] Round-trip tests with real ONNX models
+- [x] ONNX parser: extract tensor names, offsets, sizes, raw bytes
+- [x] SafeTensors parser: JSON header + flat tensor extraction
+- [x] Tensor manifest: per-tensor SHA-256 hashes
+- [x] Strategy A: tensor-level XOR delta
+- [x] Strategy B: binary delta (zstd dictionary)
+- [x] OXDL patch format: write and read
+- [x] `compute_delta(base, target) -> Patch` — both strategies, pick smaller
+- [x] `apply_delta(base, patch) -> target` — reconstruct + SHA-256 verify
+- [x] Round-trip tests with real ONNX models (9 tests)
 - [ ] Benchmark: <5s for 500 MB model delta computation
 
 ### Phase 2: Control plane
 
-- [ ] Delta cache on model upload
-- [ ] Download endpoint: delta or full based on headers
+- [x] Delta cache on model upload
+- [x] Download endpoint: delta or full based on headers
 - [ ] Campaign model (replace fire-and-forget deploy)
 - [ ] Campaign API: create / status / pause / resume / abort / bandwidth
 - [ ] Bandwidth tracking per device per campaign
 
 ### Phase 3: Agent
 
-- [ ] Send base version + tensor manifest in heartbeat
-- [ ] Delta download and reconstruction
-- [ ] SHA-256 fallback: if reconstruction fails, download full
+- [x] Send base version in download request
+- [x] Delta download and reconstruction
+- [x] SHA-256 fallback: if reconstruction fails, download full
 - [ ] Health check hooks (replace built-in inference)
 - [ ] Campaign progress reporting per heartbeat
 
