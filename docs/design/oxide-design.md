@@ -291,7 +291,7 @@ Dependencies: `prost` (ONNX protobuf), `zstd`, `sha2`.
 - [x] Delta download and reconstruction
 - [x] SHA-256 fallback: if reconstruction fails, download full
 - [x] Health check hooks (replace built-in inference)
-- [ ] Campaign progress reporting per heartbeat
+- [x] Campaign progress reporting per heartbeat
 
 ### Phase 4: Cleanup
 
