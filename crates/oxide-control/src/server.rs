@@ -362,14 +362,58 @@ impl ControlPlaneServer {
     }
 
     /// Download model bytes.
+    ///
+    /// If the agent sends `X-Oxide-Base-Version` and a cached delta exists,
+    /// serves the delta patch instead of the full file.
     async fn download_model(
         State(state): State<Arc<ControlPlaneState>>,
         Path((model_id, version)): Path<(String, String)>,
+        request_headers: axum::http::HeaderMap,
     ) -> Result<(StatusCode, axum::http::HeaderMap, Bytes), (StatusCode, String)> {
         let mid = ModelId::from(model_id.as_str());
         let ver = ModelVersion::from(version.as_str());
 
         let store = state.model_store.read().await;
+
+        // Check if agent sent base version for delta download
+        let base_version = request_headers
+            .get("x-oxide-base-version")
+            .and_then(|v| v.to_str().ok())
+            .map(ModelVersion::from);
+
+        // Try to serve a delta if we have one
+        if let Some(base_ver) = &base_version {
+            if let Ok(Some((delta_bytes, cached))) = store.get_delta(&mid, base_ver, &ver) {
+                info!(
+                    "Serving delta for {} {} → {} ({} bytes, {:.1}% savings)",
+                    model_id, base_ver, ver, delta_bytes.len(), cached.savings_pct
+                );
+
+                let mut headers = axum::http::HeaderMap::new();
+                headers.insert("content-type", "application/x-oxide-delta".parse().unwrap());
+                headers.insert(
+                    "x-oxide-delta-strategy",
+                    cached.strategy.to_lowercase().parse().unwrap(),
+                );
+                headers.insert(
+                    "x-oxide-delta-base",
+                    base_ver.0.parse().unwrap(),
+                );
+
+                // Also include target SHA for verification
+                if let Ok(meta) = store.get_meta(&mid, &ver) {
+                    headers.insert("x-oxide-target-sha256", meta.sha256.parse().unwrap());
+                    headers.insert(
+                        "x-oxide-target-size",
+                        meta.size_bytes.to_string().parse().unwrap(),
+                    );
+                }
+
+                return Ok((StatusCode::OK, headers, Bytes::from(delta_bytes)));
+            }
+        }
+
+        // No delta available — serve full file
         let meta = store
             .get_meta(&mid, &ver)
             .map_err(|e| (StatusCode::NOT_FOUND, e.to_string()))?;

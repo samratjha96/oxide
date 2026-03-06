@@ -1534,6 +1534,7 @@ dependencies = [
  "axum",
  "chrono",
  "oxide-core",
+ "oxide-delta",
  "oxide-network",
  "oxide-security",
  "serde",

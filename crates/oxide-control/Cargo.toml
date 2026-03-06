@@ -7,6 +7,7 @@ description = "Control plane and fleet management for the Oxide edge AI runtime"
 
 [dependencies]
 oxide-core = { workspace = true }
+oxide-delta = { path = "../oxide-delta" }
 oxide-network = { workspace = true }
 oxide-security = { workspace = true }
 tokio = { workspace = true }
