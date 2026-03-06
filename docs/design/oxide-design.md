@@ -281,9 +281,9 @@ Dependencies: `prost` (ONNX protobuf), `zstd`, `sha2`.
 
 - [x] Delta cache on model upload
 - [x] Download endpoint: delta or full based on headers
-- [ ] Campaign model (replace fire-and-forget deploy)
-- [ ] Campaign API: create / status / pause / resume / abort / bandwidth
-- [ ] Bandwidth tracking per device per campaign
+- [x] Campaign model (replace fire-and-forget deploy)
+- [x] Campaign API: create / status / pause / resume / abort / bandwidth
+- [x] Bandwidth tracking per device per campaign
 
 ### Phase 3: Agent
 
