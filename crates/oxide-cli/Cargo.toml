@@ -26,9 +26,13 @@ tracing-subscriber = { workspace = true }
 anyhow = { workspace = true }
 chrono = { workspace = true }
 sha2 = { workspace = true }
+reqwest = { workspace = true }
 
 [dev-dependencies]
 tempfile = { workspace = true }
 sha2 = { workspace = true }
 tower = { workspace = true, features = ["util"] }
 http-body-util = "0.1"
+
+[lints]
+workspace = true

@@ -119,6 +119,25 @@ enum Commands {
         port: u16,
     },
 
+    /// Run the device agent (polls control plane for model updates)
+    Agent {
+        /// Control plane URL
+        #[arg(long)]
+        control_plane: String,
+
+        /// This device's ID (must be pre-registered)
+        #[arg(long)]
+        device_id: String,
+
+        /// Poll interval in seconds
+        #[arg(long, default_value = "30")]
+        poll_interval: u64,
+
+        /// Local model storage directory
+        #[arg(long, default_value = "./models")]
+        model_dir: String,
+    },
+
     /// Show metrics for a running model
     Metrics {
         /// Model name
@@ -186,9 +205,12 @@ enum FleetAction {
 async fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
 
-    // Initialize logging
+    // Initialize logging — suppress library noise for the agent subcommand
+    // unless --verbose is set, because the agent has its own user-facing output.
     let filter = if cli.verbose {
         EnvFilter::new("debug")
+    } else if matches!(cli.command, Commands::Agent { .. }) {
+        EnvFilter::new("warn")
     } else {
         EnvFilter::new("info")
     };
@@ -235,6 +257,13 @@ async fn main() -> anyhow::Result<()> {
         }
 
         Commands::Serve { host, port } => commands::serve::execute(&host, port).await?,
+
+        Commands::Agent {
+            control_plane,
+            device_id,
+            poll_interval,
+            model_dir,
+        } => commands::agent::execute(&control_plane, &device_id, poll_interval, &model_dir).await?,
 
         Commands::Metrics { model } => commands::metrics::execute(model.as_deref())?,
 

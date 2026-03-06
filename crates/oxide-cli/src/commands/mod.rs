@@ -1,3 +1,4 @@
+pub mod agent;
 pub mod bench;
 pub mod decrypt;
 pub mod deploy;

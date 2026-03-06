@@ -1,14 +1,16 @@
 //! `oxide serve` — Start the control plane server.
 
 use oxide_control::fleet_manager::FleetManager;
+use oxide_control::model_store::ControlPlaneModelStore;
 use oxide_control::registry::DeviceRegistry;
 use oxide_control::server::{ControlPlaneServer, ControlPlaneState};
 use std::sync::Arc;
+use tokio::sync::RwLock;
 use tracing::info;
 
 pub async fn execute(host: &str, port: u16) -> anyhow::Result<()> {
-    println!("oxide control plane");
-    println!("───────────────────");
+    println!("⚡ oxide control plane");
+    println!("───────────────────────");
 
     let data_dir = std::env::current_dir()?.join(".oxide");
     std::fs::create_dir_all(&data_dir)?;
@@ -17,36 +19,72 @@ pub async fn execute(host: &str, port: u16) -> anyhow::Result<()> {
         &data_dir.join("devices.json"),
     )?);
     let fleet_manager = Arc::new(FleetManager::new(registry.clone()));
+    let model_store = Arc::new(RwLock::new(ControlPlaneModelStore::open(
+        &data_dir.join("models"),
+    )?));
 
     let state = Arc::new(ControlPlaneState {
         registry,
         fleet_manager,
+        model_store,
     });
 
     let app = ControlPlaneServer::router(state);
-    let addr = format!("{}:{}", host, port);
+    let addr = format!("{host}:{port}");
 
-    println!("  Listening on: http://{}", addr);
-    println!("  Data dir:     {}", data_dir.display());
+    println!("  listening: http://{addr}");
+    println!("  data dir:  {}", data_dir.display());
     println!();
-    println!("  Endpoints:");
-    println!("    GET  /health                          — Health check");
-    println!("    GET  /api/v1/devices                  — List devices");
-    println!("    POST /api/v1/devices                  — Register device");
-    println!("    GET  /api/v1/devices/:id              — Get device");
-    println!("    DEL  /api/v1/devices/:id              — Unregister device");
-    println!("    POST /api/v1/devices/:id/heartbeat    — Device heartbeat");
-    println!("    GET  /api/v1/fleets                   — List fleets");
-    println!("    POST /api/v1/fleets                   — Create fleet");
-    println!("    GET  /api/v1/fleets/:id               — Get fleet");
-    println!("    POST /api/v1/fleets/:id/devices/:did  — Add device to fleet");
-    println!("    POST /api/v1/fleets/:id/deploy        — Deploy to fleet");
-    println!("    GET  /api/v1/fleets/:id/status        — Fleet status");
+    println!("  endpoints:");
+    println!("    GET  /health                                   — health check");
+    println!("    POST /api/v1/devices                           — register device");
+    println!("    GET  /api/v1/devices                           — list devices");
+    println!("    GET  /api/v1/devices/:id                       — get device");
+    println!("    DEL  /api/v1/devices/:id                       — unregister");
+    println!("    POST /api/v1/devices/:id/heartbeat             — heartbeat");
+    println!("    POST /api/v1/fleets                            — create fleet");
+    println!("    GET  /api/v1/fleets/:id                        — get fleet");
+    println!("    POST /api/v1/fleets/:id/devices/:did           — add device");
+    println!("    POST /api/v1/fleets/:id/deploy                 — deploy to fleet");
+    println!("    GET  /api/v1/fleets/:id/status                 — fleet status");
+    println!("    POST /api/v1/models/:id/versions/:ver          — upload model");
+    println!("    GET  /api/v1/models/:id/versions/:ver/download — download model");
+    println!("    GET  /api/v1/models/:id/versions/:ver/meta     — model metadata");
+    println!();
+    println!("  press ctrl-c to stop");
     println!();
 
     let listener = tokio::net::TcpListener::bind(&addr).await?;
-    info!("Control plane started on {}", addr);
-    axum::serve(listener, app).await?;
+    info!("Control plane started on {addr}");
 
+    axum::serve(listener, app)
+        .with_graceful_shutdown(shutdown_signal())
+        .await?;
+
+    info!("Control plane shut down cleanly");
     Ok(())
+}
+
+async fn shutdown_signal() {
+    let ctrl_c = async {
+        tokio::signal::ctrl_c()
+            .await
+            .expect("failed to install ctrl+c handler");
+    };
+
+    #[cfg(unix)]
+    let terminate = async {
+        tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
+            .expect("failed to install SIGTERM handler")
+            .recv()
+            .await;
+    };
+
+    #[cfg(not(unix))]
+    let terminate = std::future::pending::<()>();
+
+    tokio::select! {
+        () = ctrl_c => { info!("received ctrl-c, shutting down..."); },
+        () = terminate => { info!("received SIGTERM, shutting down..."); },
+    }
 }

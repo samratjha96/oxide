@@ -1,7 +1,8 @@
 //! Device registry: tracks all registered devices and their status.
 
-use oxide_core::device::{Device, DeviceId, DeviceStatus};
+use oxide_core::device::{Device, DeviceId, DeviceStatus, UpdateResult};
 use oxide_core::error::{OxideError, Result};
+use oxide_core::model::{ModelId, ModelVersion};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, RwLock};
@@ -11,6 +12,12 @@ use tracing::info;
 pub struct DeviceRegistry {
     devices: Arc<RwLock<HashMap<DeviceId, Device>>>,
     persist_path: Option<PathBuf>,
+}
+
+impl Default for DeviceRegistry {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl DeviceRegistry {
@@ -142,6 +149,56 @@ impl DeviceRegistry {
     /// Get the total count of devices.
     pub fn count(&self) -> usize {
         self.devices.read().map(|d| d.len()).unwrap_or(0)
+    }
+
+    /// Update a device's current model info (called from heartbeat).
+    pub fn update_current_model(
+        &self,
+        id: &DeviceId,
+        model: Option<ModelId>,
+        version: Option<ModelVersion>,
+        update_result: Option<UpdateResult>,
+    ) -> Result<()> {
+        let mut devices = self.devices.write().map_err(|e| {
+            OxideError::Internal(format!("Lock poisoned: {}", e))
+        })?;
+
+        let device = devices
+            .get_mut(id)
+            .ok_or_else(|| OxideError::DeviceNotFound(id.to_string()))?;
+
+        device.current_model = model;
+        device.current_model_version = version;
+        if update_result.is_some() {
+            device.last_update_result = update_result;
+        }
+
+        drop(devices);
+        self.persist()?;
+        Ok(())
+    }
+
+    /// Set the assigned model for a device (called from fleet deploy).
+    pub fn set_assignment(
+        &self,
+        id: &DeviceId,
+        model: Option<ModelId>,
+        version: Option<ModelVersion>,
+    ) -> Result<()> {
+        let mut devices = self.devices.write().map_err(|e| {
+            OxideError::Internal(format!("Lock poisoned: {}", e))
+        })?;
+
+        let device = devices
+            .get_mut(id)
+            .ok_or_else(|| OxideError::DeviceNotFound(id.to_string()))?;
+
+        device.assigned_model = model;
+        device.assigned_model_version = version;
+
+        drop(devices);
+        self.persist()?;
+        Ok(())
     }
 
     fn persist(&self) -> Result<()> {

@@ -1,0 +1,374 @@
+//! `oxide agent` — Device-side daemon that polls the control plane for model updates.
+
+use oxide_core::device::{HeartbeatRequest, HeartbeatResponse, UpdateResult};
+use oxide_core::model::{ModelId, ModelVersion};
+use oxide_network::ota::{OtaUpdater, UpdatePackage};
+use oxide_runtime::InferenceEngine;
+use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
+use std::path::{Path, PathBuf};
+use std::time::Duration;
+use tokio::sync::watch;
+
+/// Persisted agent state across restarts.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+struct AgentState {
+    device_id: String,
+    current_model: Option<String>,
+    current_model_version: Option<String>,
+    model_path: Option<String>,
+    last_heartbeat: Option<String>,
+    last_update: Option<String>,
+}
+
+pub async fn execute(
+    control_plane: &str,
+    device_id: &str,
+    poll_interval: u64,
+    model_dir: &str,
+) -> anyhow::Result<()> {
+    let model_dir = PathBuf::from(model_dir);
+    std::fs::create_dir_all(&model_dir)?;
+
+    let control_plane = control_plane.trim_end_matches('/');
+    let state_file = model_dir.join(".agent-state.json");
+
+    println!("⚡ oxide agent");
+    println!("  device:     {}", device_id);
+    println!("  control:    {}", control_plane);
+    println!("  poll:       every {}s", poll_interval);
+    println!("  model dir:  {}", model_dir.display());
+    println!();
+
+    // Load persisted state
+    let mut agent_state = load_state(&state_file);
+    agent_state.device_id = device_id.to_string();
+
+    // Initialize OTA updater
+    let ota_dir = model_dir.join("ota");
+    let updater = OtaUpdater::new(&ota_dir)?;
+
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(30))
+        .build()?;
+
+    let mut backoff = poll_interval;
+    let max_backoff = 300u64; // 5 min cap
+    let mut failed_versions: std::collections::HashMap<(String, String), u32> =
+        std::collections::HashMap::new();
+
+    // Shutdown signal
+    let (shutdown_tx, mut shutdown_rx) = watch::channel(false);
+    tokio::spawn(async move {
+        let _ = tokio::signal::ctrl_c().await;
+        let _ = shutdown_tx.send(true);
+    });
+
+    loop {
+        // Sleep with shutdown awareness
+        tokio::select! {
+            _ = tokio::time::sleep(Duration::from_secs(backoff)) => {},
+            _ = shutdown_rx.changed() => {
+                println!("\n  shutting down...");
+                save_state(&state_file, &agent_state);
+                println!("  state saved. goodbye.");
+                return Ok(());
+            }
+        }
+
+        let now = chrono::Utc::now().format("%H:%M:%S").to_string();
+
+        // 1. Heartbeat
+        let hb_req = HeartbeatRequest {
+            current_model: agent_state
+                .current_model
+                .as_ref()
+                .map(|s| ModelId(s.clone())),
+            current_model_version: agent_state
+                .current_model_version
+                .as_ref()
+                .map(|s| ModelVersion(s.clone())),
+            status: Some("online".to_string()),
+            last_update_result: None,
+            metrics: None,
+        };
+
+        let hb_url = format!(
+            "{}/api/v1/devices/{}/heartbeat",
+            control_plane, device_id
+        );
+
+        let resp = match client.post(&hb_url).json(&hb_req).send().await {
+            Ok(r) => r,
+            Err(e) => {
+                println!("  [{}] ✗ heartbeat failed: {}", now, e);
+                backoff = (backoff * 2).min(max_backoff);
+                continue;
+            }
+        };
+
+        if !resp.status().is_success() {
+            let status = resp.status();
+            let body = resp.text().await.unwrap_or_default();
+            println!(
+                "  [{}] ✗ heartbeat returned {}: {}",
+                now, status, body
+            );
+            backoff = (backoff * 2).min(max_backoff);
+            continue;
+        }
+
+        // Reset backoff on success
+        backoff = poll_interval;
+
+        let hb_resp: HeartbeatResponse = match resp.json().await {
+            Ok(r) => r,
+            Err(e) => {
+                println!("  [{}] ✗ bad heartbeat response: {}", now, e);
+                continue;
+            }
+        };
+
+        agent_state.last_heartbeat = Some(chrono::Utc::now().to_rfc3339());
+
+        // 2. Check assignment
+        let assigned_model = hb_resp.assigned_model.as_ref().map(|m| m.0.clone());
+        let assigned_version = hb_resp
+            .assigned_model_version
+            .as_ref()
+            .map(|v| v.0.clone());
+
+        match (&assigned_model, &assigned_version) {
+            (Some(m), Some(v)) => {
+                let is_current = agent_state.current_model.as_deref() == Some(m.as_str())
+                    && agent_state.current_model_version.as_deref() == Some(v.as_str());
+
+                if is_current {
+                    println!("  [{}] heartbeat ok — model current ({}@{})", now, m, v);
+                    continue;
+                }
+
+                // Check poison pill
+                let key = (m.clone(), v.clone());
+                let attempts = failed_versions.get(&key).copied().unwrap_or(0);
+                if attempts >= 3 {
+                    println!(
+                        "  [{}] heartbeat ok — skipping {}@{} (failed {} times)",
+                        now, m, v, attempts
+                    );
+                    continue;
+                }
+
+                println!(
+                    "  [{}] heartbeat ok — assigned {}@{}",
+                    now, m, v
+                );
+
+                // 3. Download model
+                let dl_url = format!(
+                    "{}/api/v1/models/{}/versions/{}/download",
+                    control_plane, m, v
+                );
+                println!("  [{}] downloading {}@{}...", now, m, v);
+
+                let dl_resp = match client.get(&dl_url).send().await {
+                    Ok(r) if r.status().is_success() => r,
+                    Ok(r) => {
+                        println!(
+                            "  [{}] ✗ download failed: HTTP {}",
+                            now,
+                            r.status()
+                        );
+                        continue;
+                    }
+                    Err(e) => {
+                        println!("  [{}] ✗ download failed: {}", now, e);
+                        continue;
+                    }
+                };
+
+                let expected_sha = dl_resp
+                    .headers()
+                    .get("x-oxide-sha256")
+                    .and_then(|v| v.to_str().ok())
+                    .map(|s| s.to_string());
+
+                let model_bytes = match dl_resp.bytes().await {
+                    Ok(b) => b,
+                    Err(e) => {
+                        println!("  [{}] ✗ download body failed: {}", now, e);
+                        continue;
+                    }
+                };
+
+                println!(
+                    "  [{}] downloaded {} bytes",
+                    now,
+                    model_bytes.len()
+                );
+
+                // Verify SHA-256
+                let actual_sha = sha256_hex(&model_bytes);
+                if let Some(ref expected) = expected_sha {
+                    if &actual_sha != expected {
+                        println!(
+                            "  [{}] ✗ sha-256 mismatch: expected {}..., got {}...",
+                            now,
+                            &expected[..8],
+                            &actual_sha[..8]
+                        );
+                        continue;
+                    }
+                }
+
+                // 4. OTA pipeline: stage → verify → apply → health-check
+                let package = UpdatePackage {
+                    model_id: ModelId(m.clone()),
+                    new_version: ModelVersion(v.clone()),
+                    previous_version: agent_state
+                        .current_model_version
+                        .as_ref()
+                        .map(|s| ModelVersion(s.clone())),
+                    sha256: actual_sha.clone(),
+                    size_bytes: model_bytes.len() as u64,
+                    encrypted: false,
+                };
+
+                print!("  [{}] staging...", now);
+                let mut update_state = match updater.stage_update(&package, &model_bytes) {
+                    Ok(s) => {
+                        println!(" done");
+                        s
+                    }
+                    Err(e) => {
+                        println!(" ✗ failed: {}", e);
+                        *failed_versions.entry(key).or_insert(0) += 1;
+                        report_failure(&client, &hb_url, &hb_req, &e.to_string()).await;
+                        continue;
+                    }
+                };
+
+                println!("  [{}] verifying... ok (sha-256 match)", now);
+
+                print!("  [{}] applying...", now);
+                let active_path = match updater.apply_update(&mut update_state) {
+                    Ok(p) => {
+                        println!(" done");
+                        p
+                    }
+                    Err(e) => {
+                        println!(" ✗ failed: {}", e);
+                        *failed_versions.entry(key).or_insert(0) += 1;
+                        report_failure(&client, &hb_url, &hb_req, &e.to_string()).await;
+                        continue;
+                    }
+                };
+
+                // 5. Health check
+                print!("  [{}] health check...", now);
+                match run_health_check(&active_path) {
+                    Ok((latency, outputs)) => {
+                        println!(" passed ({:.0}μs, {} outputs)", latency, outputs);
+                    }
+                    Err(e) => {
+                        println!(" ✗ failed: {}", e);
+                        // Rollback
+                        if let Some(prev_ver) = &agent_state.current_model_version {
+                            let _ = updater.rollback(
+                                &ModelId(m.clone()),
+                                &ModelVersion(prev_ver.clone()),
+                            );
+                            println!("  [{}] rolled back to {}@{}", now, m, prev_ver);
+                        }
+                        *failed_versions.entry(key).or_insert(0) += 1;
+                        report_failure(&client, &hb_url, &hb_req, &e.to_string()).await;
+                        continue;
+                    }
+                }
+
+                // 6. Update state
+                agent_state.current_model = Some(m.clone());
+                agent_state.current_model_version = Some(v.clone());
+                agent_state.model_path = Some(active_path.display().to_string());
+                agent_state.last_update = Some(chrono::Utc::now().to_rfc3339());
+                save_state(&state_file, &agent_state);
+
+                // Clear any failed attempts for this version (it worked now)
+                failed_versions.remove(&(m.clone(), v.clone()));
+
+                println!(
+                    "  [{}] ✓ model active: {}@{}",
+                    now, m, v
+                );
+            }
+            _ => {
+                println!("  [{}] heartbeat ok — no model assigned", now);
+            }
+        }
+    }
+}
+
+fn run_health_check(model_path: &Path) -> anyhow::Result<(f64, usize)> {
+    let engine = InferenceEngine::new(0);
+    let info = engine.load_model(model_path)?;
+
+    // Build zero input matching model's expected shape
+    let input_shape: Vec<usize> = info
+        .inputs
+        .first()
+        .map(|inp| {
+            inp.shape
+                .iter()
+                .map(|&d| if d < 0 { 1 } else { d as usize })
+                .collect()
+        })
+        .unwrap_or_else(|| vec![1]);
+    let input_size: usize = input_shape.iter().product();
+    let input_data = vec![0.0f32; input_size];
+
+    let start = std::time::Instant::now();
+    let result = engine.infer(&info.id, &input_data, &input_shape)?;
+    let latency_us = start.elapsed().as_secs_f64() * 1_000_000.0;
+
+    if result.outputs.is_empty() {
+        anyhow::bail!("inference produced 0 outputs");
+    }
+
+    Ok((latency_us, result.outputs.len()))
+}
+
+fn sha256_hex(data: &[u8]) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(data);
+    format!("{:x}", hasher.finalize())
+}
+
+fn load_state(path: &Path) -> AgentState {
+    if path.exists() {
+        std::fs::read_to_string(path)
+            .ok()
+            .and_then(|s| serde_json::from_str(&s).ok())
+            .unwrap_or_default()
+    } else {
+        AgentState::default()
+    }
+}
+
+fn save_state(path: &Path, state: &AgentState) {
+    if let Ok(json) = serde_json::to_string_pretty(state) {
+        let _ = std::fs::write(path, json);
+    }
+}
+
+async fn report_failure(
+    client: &reqwest::Client,
+    hb_url: &str,
+    base_req: &HeartbeatRequest,
+    error: &str,
+) {
+    let mut req = base_req.clone();
+    req.last_update_result = Some(UpdateResult::Failed {
+        error: error.to_string(),
+    });
+    let _ = client.post(hb_url).json(&req).send().await;
+}

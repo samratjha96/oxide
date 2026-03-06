@@ -80,6 +80,14 @@ impl DevicePlatform {
     }
 }
 
+/// Result of the last OTA update attempt.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum UpdateResult {
+    Success,
+    Failed { error: String },
+}
+
 /// Represents an edge device that runs the Oxide runtime.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Device {
@@ -95,10 +103,19 @@ pub struct Device {
     pub current_model: Option<crate::model::ModelId>,
     /// Currently deployed model version.
     pub current_model_version: Option<crate::model::ModelVersion>,
+    /// Model the control plane wants this device to run.
+    #[serde(default)]
+    pub assigned_model: Option<crate::model::ModelId>,
+    /// Version the control plane wants this device to run.
+    #[serde(default)]
+    pub assigned_model_version: Option<crate::model::ModelVersion>,
     /// Fleet this device belongs to (if any).
     pub fleet_id: Option<crate::fleet::FleetId>,
     /// Last time device checked in.
     pub last_heartbeat: Option<chrono::DateTime<chrono::Utc>>,
+    /// Result of the last update attempt.
+    #[serde(default)]
+    pub last_update_result: Option<UpdateResult>,
     /// Device tags for grouping/filtering.
     pub tags: std::collections::HashMap<String, String>,
 }
@@ -113,8 +130,11 @@ impl Device {
             platform: DevicePlatform::detect(),
             current_model: None,
             current_model_version: None,
+            assigned_model: None,
+            assigned_model_version: None,
             fleet_id: None,
             last_heartbeat: None,
+            last_update_result: None,
             tags: std::collections::HashMap::new(),
         }
     }
@@ -132,6 +152,44 @@ impl Device {
             false
         }
     }
+}
+
+/// Lightweight metrics sent with heartbeats.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BasicMetrics {
+    #[serde(default)]
+    pub inference_count: u64,
+    #[serde(default)]
+    pub avg_latency_us: f64,
+    #[serde(default)]
+    pub uptime_secs: u64,
+    #[serde(default)]
+    pub free_memory_bytes: Option<u64>,
+}
+
+/// Heartbeat request body sent by the agent.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct HeartbeatRequest {
+    #[serde(default)]
+    pub current_model: Option<crate::model::ModelId>,
+    #[serde(default)]
+    pub current_model_version: Option<crate::model::ModelVersion>,
+    #[serde(default)]
+    pub status: Option<String>,
+    #[serde(default)]
+    pub last_update_result: Option<UpdateResult>,
+    #[serde(default)]
+    pub metrics: Option<BasicMetrics>,
+}
+
+/// Heartbeat response returned to the agent.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct HeartbeatResponse {
+    pub status: String,
+    #[serde(default)]
+    pub assigned_model: Option<crate::model::ModelId>,
+    #[serde(default)]
+    pub assigned_model_version: Option<crate::model::ModelVersion>,
 }
 
 #[cfg(test)]

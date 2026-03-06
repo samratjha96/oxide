@@ -142,7 +142,7 @@ mod inference {
 
 mod engine_integration {
     use super::*;
-    use oxide_core::model::ModelId;
+    
     use oxide_runtime::InferenceEngine;
 
     #[test]
@@ -491,17 +491,24 @@ mod control_plane_integration {
     use axum::body::Body;
     use http_body_util::BodyExt;
     use oxide_control::fleet_manager::FleetManager;
+    use oxide_control::model_store::ControlPlaneModelStore;
     use oxide_control::registry::DeviceRegistry;
     use oxide_control::server::{ControlPlaneServer, ControlPlaneState};
     use std::sync::Arc;
+    use tokio::sync::RwLock;
     use tower::ServiceExt;
 
     fn make_app() -> axum::Router {
+        let dir = tempfile::TempDir::new().unwrap();
         let registry = Arc::new(DeviceRegistry::new());
         let fleet_manager = Arc::new(FleetManager::new(registry.clone()));
+        let model_store = Arc::new(RwLock::new(
+            ControlPlaneModelStore::open(&dir.path().join("models")).unwrap(),
+        ));
         let state = Arc::new(ControlPlaneState {
             registry,
             fleet_manager,
+            model_store,
         });
         ControlPlaneServer::router(state)
     }
