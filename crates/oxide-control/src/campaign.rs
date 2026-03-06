@@ -235,6 +235,21 @@ impl CampaignStore {
         })
     }
 
+    /// Find the active campaign for a device (mutable).
+    pub fn active_for_device_mut(&mut self, device_id: &DeviceId) -> Option<&mut Campaign> {
+        self.campaigns.values_mut().find(|c| {
+            c.state == CampaignState::RollingOut
+                && c.devices.contains_key(device_id)
+                && matches!(
+                    c.devices.get(device_id),
+                    Some(DeviceUpdateState::Pending)
+                        | Some(DeviceUpdateState::Downloading)
+                        | Some(DeviceUpdateState::Applying)
+                        | Some(DeviceUpdateState::Verifying)
+                )
+        })
+    }
+
     pub fn list(&self) -> Vec<&Campaign> {
         self.campaigns.values().collect()
     }

@@ -7,7 +7,7 @@ use axum::{
     routing::{get, post},
     Router,
 };
-use oxide_core::device::{Device, DeviceId, HeartbeatRequest, HeartbeatResponse};
+use oxide_core::device::{Device, DeviceId, HeartbeatRequest, HeartbeatResponse, UpdateResult};
 use oxide_core::fleet::{Fleet, FleetId, RolloutStrategy};
 use oxide_core::model::{ModelId, ModelVersion};
 use serde::Deserialize;
@@ -179,16 +179,41 @@ impl ControlPlaneServer {
             .map_err(|e| (StatusCode::NOT_FOUND, e.to_string()))?;
 
         // If the agent sent a body, update device record with current model info
-        if let Some(Json(req)) = body {
+        if let Some(Json(ref req)) = body {
             state
                 .registry
                 .update_current_model(
                     &device_id,
-                    req.current_model,
-                    req.current_model_version,
-                    req.last_update_result,
+                    req.current_model.clone(),
+                    req.current_model_version.clone(),
+                    req.last_update_result.clone(),
                 )
                 .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+
+            // Update campaign progress based on device state
+            let mut campaigns = state.campaigns.write().await;
+            if let Some(campaign) = campaigns.active_for_device_mut(&device_id) {
+                let target = &campaign.target_version;
+                if req.current_model_version.as_ref() == Some(target) {
+                    // Device is on the target version — mark complete
+                    campaign.update_device(
+                        &device_id,
+                        crate::campaign::DeviceUpdateState::Complete {
+                            completed_at: chrono::Utc::now().to_rfc3339(),
+                            bytes_downloaded: 0, // TODO: track from download endpoint
+                        },
+                    );
+                } else if let Some(UpdateResult::Failed { ref error }) = req.last_update_result {
+                    // Device reported failure
+                    campaign.update_device(
+                        &device_id,
+                        crate::campaign::DeviceUpdateState::Failed {
+                            error: error.clone(),
+                            attempts: 1,
+                        },
+                    );
+                }
+            }
         }
 
         // Read the device to get its assignment
