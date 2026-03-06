@@ -290,13 +290,13 @@ Dependencies: `prost` (ONNX protobuf), `zstd`, `sha2`.
 - [x] Send base version in download request
 - [x] Delta download and reconstruction
 - [x] SHA-256 fallback: if reconstruction fails, download full
-- [ ] Health check hooks (replace built-in inference)
+- [x] Health check hooks (replace built-in inference)
 - [ ] Campaign progress reporting per heartbeat
 
 ### Phase 4: Cleanup
 
-- [ ] Remove inference engine from agent
-- [ ] Agent = delivery + lifecycle only
+- [x] Remove inference engine from agent
+- [x] Agent = delivery + lifecycle only
 - [x] Update README
 
 ### Phase 5: Harden (separate)
