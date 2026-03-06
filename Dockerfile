@@ -5,6 +5,11 @@ FROM rust:latest AS builder
 WORKDIR /build
 COPY . .
 
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    ca-certificates \
+    protobuf-compiler \
+    && rm -rf /var/lib/apt/lists/*
+
 # Release build: LTO, stripped, optimized for size
 RUN cargo build --release -p oxide-cli 2>&1 \
     && strip target/release/oxide
