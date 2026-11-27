@@ -1,4 +1,4 @@
-# ⚡ Oxide
+# Oxide
 
 ```
    ██████  ██   ██ ██ ██████  ███████
@@ -8,98 +8,69 @@
    ██████  ██   ██ ██ ██████  ███████
 ```
 
-**ML model delivery for device fleets. Ships only the bytes that changed.**
+Oxide ships ML model updates to fleets of edge devices and sends only the bytes that changed.
 
-Oxide delivers ML model updates to edge devices using the minimum possible bandwidth. It understands model file structure — tensors, weights, layers — and ships only what changed between versions.
+It is a single Rust binary that runs as either the control plane or the device agent. The control plane stores model versions and computes deltas between them. The agent polls for updates, downloads a delta, rebuilds the new model from the one it already has, and rolls back if the health check fails.
 
-One binary. Control plane + device agent. ONNX-aware delta compression with automatic fallback. Pull-based delivery (works through NATs and firewalls). Rollback on failure.
+## Why
 
-<p align="center">
-  <img alt="License" src="https://img.shields.io/badge/license-MIT%20%2F%20Apache--2.0-blue" />
-  <img alt="Binary" src="https://img.shields.io/badge/binary-6.0%20MB-green" />
-  <img alt="Delta" src="https://img.shields.io/badge/delta-99.9%25%20savings-blueviolet" />
-</p>
+A 100 MB model sent to 1,000 devices is 100 GB per update. Over an LTE Cat-M1 link (about 300 kbps) that takes roughly 45 minutes per device, and cellular data costs $5 to $30 per GB.
 
----
+Most updates don't touch most of the weights. If you only retrain the last layer, everything else is already on the device. Oxide parses the ONNX file, hashes each tensor, and sends only the tensors that differ.
 
-## The Problem
+## How it works
 
-A 100 MB model pushed to 1,000 devices = 100 GB of bandwidth per update. Over LTE Cat-M1 (~300 kbps), that's 45 minutes per device and $5–30/GB in cellular data costs.
+When you upload a new version, the control plane computes a delta from each earlier version using two strategies and keeps the smaller one:
 
-But fine-tuning typically changes <20% of weights. 80%+ of that transfer is redundant bytes the device already has.
+- **Tensor delta.** Parse the ONNX protobuf and compare tensors by SHA-256. Unchanged tensors are skipped. Changed tensors are XORed against the old version and compressed with zstd. The graph structure is sent separately with the weights stripped out.
+- **Binary delta.** Compress the new file with zstd, using the old file as the dictionary. This works for any format.
 
-**Oxide computes tensor-level deltas**: it parses your ONNX file, hashes each tensor, and ships only the changed ones with XOR compression. For transfer learning (last layer only), a 2.1 MB model update becomes **1,263 bytes**.
+If neither delta is smaller than the full file, the full file is sent instead.
 
----
+On the device, the agent:
 
-## How It Works
+1. Sends a heartbeat with the version it has.
+2. Downloads the delta for its assigned version, or the full file if there is no delta.
+3. Rebuilds the model and checks its SHA-256.
+4. Backs up the current model and applies the new one.
+5. Runs the health check and rolls back if it fails.
 
-```
-  CONTROL PLANE                                        DEVICE AGENT
-  +------------------------+                           +------------------------+
-  |                        |                           |                        |
-  |  Model Store           | <--- heartbeat ---------- |  "I have v1"           |
-  |    v1  (2.1 MB)        |                           |                        |
-  |    v2  (2.1 MB)        | --- assignment ---------> |  "run v2"              |
-  |    delta/v1..v2.oxdl   |                           |                        |
-  |       (1,263 bytes)    | --- delta download -----> |  receive 1,263 bytes   |
-  |                        |                           |  reconstruct from v1   |
-  |  On upload:            |                           |  verify SHA-256        |
-  |    1. Store file       |                           |  backup v1, apply v2   |
-  |    2. Compute delta    |                           |  health check          |
-  |    3. Cache patch      | <--- heartbeat ---------- |  "I have v2"  ok       |
-  |                        |                           |                        |
-  +------------------------+                           +------------------------+
+## Benchmarks
 
-  Without delta: 2.1 MB x 1,000 devices = 2.1 GB
-  With delta:    1,263 bytes x 1,000 devices = 1.2 MB
-```
+Delta size for a 2.1 MB ONNX model:
 
-### Two delta strategies, best wins
+| Change | Full file | Tensor delta | Binary delta |
+|---|---:|---:|---:|
+| Last layer retrained | 2,094 KB | **9 KB** | 10 KB |
+| 5% of weights changed in every layer | 2,094 KB | 154 KB | **121 KB** |
+| Full retrain | 2,094 KB | 1,981 KB | **1,942 KB** |
 
-| Scenario | Full file | Tensor delta | Binary delta | Winner |
-|----------|----------:|-------------:|-------------:|--------|
-| Transfer learning (last layer) | 2,094 KB | **9 KB** | 10 KB | Tensor |
-| Fine-tuning (all layers, 5%) | 2,094 KB | 154 KB | **121 KB** | Binary |
-| Full retrain | 2,094 KB | 1,981 KB | **1,942 KB** | Binary |
-
-- **Tensor-level** (ML-aware): Parse ONNX protobuf, hash each tensor, skip unchanged, XOR-delta changed tensors
-- **Binary** (format-agnostic): zstd dictionary compression using previous version as dictionary
-- **Decision**: compute both, cache whichever is smaller. Fall back to full file if delta is larger.
-
-### Measured E2E (real processes, real ONNX model)
+An end-to-end run with a real control plane and agent turned a last-layer update into a 1,263-byte download:
 
 ```
-Upload v1 (2.1 MB)    → stored
-Upload v2 (last layer) → delta cached: 1,263 bytes (99.9% savings, Tensor strategy)
+Upload v1 (2.1 MB)     → stored
+Upload v2 (last layer) → delta cached: 1,263 bytes (Tensor strategy)
 
-Agent picks up v1:
-  downloading m1@v1... model ready: 2143752 bytes
-  staging... done → verifying... ok → applying... done
-  health check... passed (113μs)
-  ✓ model active: m1@v1
-
-Deploy v2 to fleet:
-  downloading m1@v2...
+Agent on v1, deploy v2:
   received delta (1263 bytes), reconstructing...
-  reconstructed 2143752 bytes (99.9% bandwidth saved)
+  reconstructed 2143752 bytes
   staging... done → verifying... ok → applying... done
   health check... passed (59μs)
-  ✓ model active: m1@v2
+  model active: m1@v2
 ```
 
----
+Run it yourself with `scripts/demo.sh`.
 
-## Quick Start
+## Quick start
 
 ```bash
 git clone https://github.com/samratjha96/oxide && cd oxide
 cargo build --release
 
-# Start control plane
+# Start the control plane
 ./target/release/oxide serve --port 8080
 
-# In another terminal: register device + fleet
+# Register a device and a fleet
 curl -X POST localhost:8080/api/v1/devices \
   -H "Content-Type: application/json" \
   -d '{"id": "cam-01", "name": "East Camera"}'
@@ -110,130 +81,99 @@ curl -X POST localhost:8080/api/v1/fleets \
 
 curl -X POST localhost:8080/api/v1/fleets/factory/devices/cam-01
 
-# Upload model versions
+# Upload two versions. The delta is computed on upload.
 curl -X POST localhost:8080/api/v1/models/defect/versions/v1 \
   --data-binary @model-v1.onnx
 
 curl -X POST localhost:8080/api/v1/models/defect/versions/v2 \
   --data-binary @model-v2.onnx
-# → delta cached automatically on upload
 
-# Create deployment campaign
+# Roll v2 out to the fleet
 curl -X POST localhost:8080/api/v1/campaigns \
   -H "Content-Type: application/json" \
   -d '{"model_id": "defect", "model_version": "v2", "fleet_id": "factory"}'
 
-# Start agent on device (downloads v2 via delta)
+# Start the agent on the device
 ./target/release/oxide agent \
   --control-plane http://10.0.0.1:8080 \
   --device-id cam-01 \
   --poll-interval 30
 ```
 
----
-
 ## Features
 
-### Delta compression (oxide-delta crate)
+Control plane:
 
-The core differentiator. Pure Rust, no network dependency.
+- Stores model versions and computes deltas on upload
+- Serves a delta or the full file depending on what the device already has
+- Tracks devices by heartbeat and groups them into fleets
+- Runs rollout campaigns you can pause, resume, or abort, with per-device progress and bandwidth saved
 
-- **ONNX protobuf parser** — extracts tensor names, sizes, and raw bytes via prost
-- **SafeTensors detection** — JSON header + flat tensor layout
-- **Tensor manifest** — per-tensor SHA-256 hashes (sent in download headers)
-- **OXDL patch format** — binary format with COPY/REPLACE/XOR chunks
-- **Round-trip verified** — SHA-256 check on reconstructed file, always
+Agent:
 
-### Control plane
+- Polls for updates, so it works behind NAT and firewalls
+- Falls back to a full download if a delta can't be applied
+- Rolls back when the health check fails, and stops retrying a version after 3 failures
+- Keeps its state across restarts
 
-- Model store with automatic delta caching on upload
-- Delta-aware download endpoint (serves patch or full file based on headers)
-- Device registry with heartbeat tracking
-- Fleet management (create, add devices, deploy)
-- Campaign tracking with per-device progress and bandwidth stats
-- Campaign lifecycle: create → rolling_out → pause/resume → complete/abort
-
-### Device agent
-
-- Pull-based polling (works through NATs, firewalls, intermittent connectivity)
-- Delta-aware downloads with automatic fallback to full file
-- Full OTA pipeline: stage → verify → backup → apply → health check → rollback
-- Poison pill protection (won't retry same broken version 3+ times)
-- State persistence across restarts
-- Graceful shutdown on SIGTERM/ctrl-c
-
-### Also included
-
-- ONNX inference via [tract](https://github.com/sonos/tract) (microsecond latency)
-- AES-256-GCM model encryption
-- Canary/rolling/all-at-once rollout strategies
-- Benchmarking CLI
-
----
+Also included: ONNX inference via [tract](https://github.com/sonos/tract), AES-256-GCM model encryption, canary and rolling rollouts, and a benchmark command.
 
 ## API
 
 ```
 Devices
-  POST   /api/v1/devices                           Register
-  GET    /api/v1/devices                           List
-  GET    /api/v1/devices/:id                       Get
-  DELETE /api/v1/devices/:id                       Remove
-  POST   /api/v1/devices/:id/heartbeat             Heartbeat
+  POST   /api/v1/devices                            Register
+  GET    /api/v1/devices                            List
+  GET    /api/v1/devices/:id                        Get
+  DELETE /api/v1/devices/:id                        Remove
+  POST   /api/v1/devices/:id/heartbeat              Heartbeat
 
 Fleets
-  POST   /api/v1/fleets                            Create
-  GET    /api/v1/fleets/:id                        Get
-  POST   /api/v1/fleets/:id/devices/:did           Add device
-  POST   /api/v1/fleets/:id/deploy                 Deploy (legacy)
-  GET    /api/v1/fleets/:id/status                 Status
+  POST   /api/v1/fleets                             Create
+  GET    /api/v1/fleets/:id                         Get
+  POST   /api/v1/fleets/:id/devices/:did            Add device
+  POST   /api/v1/fleets/:id/deploy                  Deploy (legacy)
+  GET    /api/v1/fleets/:id/status                  Status
 
 Models
-  POST   /api/v1/models/:id/versions/:ver          Upload (triggers delta computation)
-  GET    /api/v1/models/:id/versions/:ver/download  Download (delta-aware)
+  POST   /api/v1/models/:id/versions/:ver           Upload
+  GET    /api/v1/models/:id/versions/:ver/download  Download (delta if available)
   GET    /api/v1/models/:id/versions/:ver/meta      Metadata
-  GET    /api/v1/models/:id                        List versions
+  GET    /api/v1/models/:id                         List versions
 
 Campaigns
-  POST   /api/v1/campaigns                         Create campaign
-  GET    /api/v1/campaigns                         List
-  GET    /api/v1/campaigns/:id                     Status + per-device breakdown
-  POST   /api/v1/campaigns/:id/pause               Pause
-  POST   /api/v1/campaigns/:id/resume              Resume
-  POST   /api/v1/campaigns/:id/abort               Abort
+  POST   /api/v1/campaigns                          Create
+  GET    /api/v1/campaigns                          List
+  GET    /api/v1/campaigns/:id                      Status and per-device breakdown
+  POST   /api/v1/campaigns/:id/pause                Pause
+  POST   /api/v1/campaigns/:id/resume               Resume
+  POST   /api/v1/campaigns/:id/abort                Abort
 
 Health
   GET    /health                                    Control plane health
 ```
 
----
-
-## Architecture
+## Layout
 
 ```
 crates/
-├── oxide-delta       ML-aware delta compression (ONNX parser, OXDL format)
-├── oxide-core        Types, config, errors, metrics
-├── oxide-models      ONNX loading via tract
-├── oxide-runtime     Inference engine, model store, health checks
-├── oxide-security    AES-256-GCM encryption, SHA-256 integrity
-├── oxide-network     Device REST API, OTA update engine
-├── oxide-control     Registry, fleet manager, model store, campaigns, server
-└── oxide-cli         The binary (11 subcommands)
+├── oxide-delta      Delta compression (ONNX parser, OXDL patch format)
+├── oxide-core       Shared types, config, errors, metrics
+├── oxide-models     ONNX loading via tract
+├── oxide-runtime    Inference engine, model store, health checks
+├── oxide-security   AES-256-GCM encryption, SHA-256 checks
+├── oxide-network    Device API, OTA update pipeline
+├── oxide-control    Registry, fleets, model store, campaigns, HTTP server
+└── oxide-cli        The oxide binary
 ```
-
----
 
 ## Development
 
 ```bash
-cargo build --workspace                  # Debug build
-cargo build --release                    # Release (6 MB binary)
-cargo test --workspace                   # All tests
-cargo clippy --workspace --tests         # Zero warnings
+cargo build --workspace
+cargo test --workspace
+cargo clippy --workspace --tests
 ```
-
----
 
 ## License
 
